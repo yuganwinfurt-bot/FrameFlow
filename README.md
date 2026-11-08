@@ -182,9 +182,10 @@ FrameFlow/
 - 撤销/重做仅在编辑页当前会话内有效
 - 界面按 125% 缩放调过；100% 缩放下信息密度偏松
 
-## 开发记录
+## 开发过程与文档
 
 - [SESSION_SUMMARY.md](SESSION_SUMMARY.md)：开发会话总结，逐轮记录开发者反馈、决策与落地的改动
+- [docs/FrameFlow_开发会话总结_2026-11-07.md](docs/FrameFlow_开发会话总结_2026-11-07.md)：笔试要求的会话总结，含开发者逐条反馈、决策理由与被推翻的方案（**历史快照**，文中「测试数量」等数字以 `TEST_REPORT.md` 为准）
 - [docs/session-2026-11-07.md](docs/session-2026-11-07.md)：面向外部读者的开发会话文档（含需求对照与复盘）
 - [TEST_REPORT.md](TEST_REPORT.md)：单元测试、真实转换、GUI 自动化与打包验收记录
 
