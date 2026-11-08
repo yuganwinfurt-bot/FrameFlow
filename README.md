@@ -52,10 +52,15 @@
 
 ## 下载
 
-Windows 免安装版本（onedir，解压即用，内置 FFmpeg）：
+Windows 免安装版本（onedir，解压即用，内置 FFmpeg / FFprobe）：
+
+**https://github.com/yuganwinfurt-bot/FrameFlow/releases/latest**
 
 - 发行包：`FrameFlow-Windows-x64.zip`（约 120 MB，解压后约 313 MB）
-- **GitHub Release 尚未发布**，因此这里暂时没有公开下载链接；发布 `v1.0.0` 后会把 ZIP 作为附件挂上去，届时本节会替换为真实链接。
+- 解压后双击目录内的 `FrameFlow.exe`；`FrameFlow.exe` 必须与 `_internal\` 放在一起，不能单独复制 EXE
+- 不需要安装 Python、PySide6、Pillow 或 FFmpeg；不需要管理员权限
+
+如果上面的链接暂时打不开，说明 `v1.0.0` Release 尚未发布，请到仓库的 [Releases](https://github.com/yuganwinfurt-bot/FrameFlow/releases) 页面查看。
 
 ## 界面截图
 
