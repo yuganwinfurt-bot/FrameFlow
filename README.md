@@ -147,7 +147,8 @@ FrameFlow/
 ├─ build_windows.bat        # 一键构建脚本
 ├─ requirements.txt
 ├─ README.md
-├─ SESSION_SUMMARY.md       # 开发会话总结（决策与反馈）
+├─ SESSION_SUMMARY.md       # 功能演进记录（决策与反馈）
+├─ FrameFlow_开发会话总结_2026-11-07.md  # 笔试要求的会话总结（历史快照）
 └─ TEST_REPORT.md           # 测试报告
 ```
 
@@ -185,7 +186,7 @@ FrameFlow/
 ## 开发过程与文档
 
 - [SESSION_SUMMARY.md](SESSION_SUMMARY.md)：开发会话总结，逐轮记录开发者反馈、决策与落地的改动
-- [docs/FrameFlow_开发会话总结_2026-11-07.md](docs/FrameFlow_开发会话总结_2026-11-07.md)：笔试要求的会话总结，含开发者逐条反馈、决策理由与被推翻的方案（**历史快照**，文中「测试数量」等数字以 `TEST_REPORT.md` 为准）
+- [FrameFlow_开发会话总结_2026-11-07.md](FrameFlow_开发会话总结_2026-11-07.md)：笔试要求的会话总结，含开发者逐条反馈、决策理由与被推翻的方案（**历史快照**，文中「测试数量」等数字以 `TEST_REPORT.md` 为准）
 - [docs/session-2026-11-07.md](docs/session-2026-11-07.md)：面向外部读者的开发会话文档（含需求对照与复盘）
 - [TEST_REPORT.md](TEST_REPORT.md)：单元测试、真实转换、GUI 自动化与打包验收记录
 
