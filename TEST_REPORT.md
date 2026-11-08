@@ -1,7 +1,7 @@
 # FrameFlow 交付前测试报告
 
 生成时间：2026-11-08
-测试对象：`C:\Users\yugan\Desktop\2 - 副本`（git 基线 `e7ee290`）
+测试对象：`<项目目录>`（git 基线 `e7ee290`）
 测试性质：只测试、不修改业务代码。
 
 ---
@@ -19,13 +19,13 @@
 命令：
 
 ```powershell
-cd "C:\Users\yugan\Desktop\2 - 副本"
+cd "<项目目录>"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v          # 第一层
 .\.venv\Scripts\python.exe "$env:TEMP\ffshot\qc_conv.py"             # 第二层
 .\.venv\Scripts\python.exe "$env:TEMP\ffshot\qc_gui.py"              # 第三层（offscreen）
 ```
 
-测试脚本位于临时目录，未写入项目、未污染用户输出目录；所有产物在 `%TEMP%\ffshot\qc\`。
+测试脚本位于临时目录，未写入项目、未污染用户输出目录；所有产物在 `<临时目录>`。
 
 ---
 
@@ -247,7 +247,7 @@ P0：无。P1：无。
 
 - 单元测试：`python -m unittest discover -s tests` → **Ran 33 tests ... OK**（42.9 s）
 - 代码改动：**无**（仅本文件追加测试记录）
-- 测试脚本：`%TEMP%\ffshot\final_alpha.py`、`final_gui.py`、`final_gui2.py`、`final_batch.py`、`final_extract.py`，均在临时目录，未进仓库
+- 测试脚本：`<临时目录>`、`final_gui.py`、`final_gui2.py`、`final_batch.py`、`final_extract.py`，均在临时目录，未进仓库
 
 ## 六、是否存在阻止交付的 P0 / P1
 
@@ -281,7 +281,7 @@ PROJECT = Path(getattr(__import__("sys"), "_MEIPASS", _SOURCE_ROOT))
 
 ## 实机验证（从与源码无关的临时目录启动）
 
-把 `dist\FrameFlow` 整体复制到 `%TEMP%\ffdist` 后运行 `FrameFlow.exe`：
+把 `dist\FrameFlow` 整体复制到 `<临时目录>` 后运行 `FrameFlow.exe`：
 
 | # | 项目 | 结果 | 证据 |
 |---|---|---|---|
@@ -289,7 +289,7 @@ PROJECT = Path(getattr(__import__("sys"), "_MEIPASS", _SOURCE_ROOT))
 | 2 | 随包 FFmpeg 可用 | PASS | `_internal\bin\ffmpeg.exe -version` → `9.0.2-essentials` |
 | 3 | 随包 FFprobe 可用 | PASS | 对样片返回 `mov,mp4,m4a,3gp,3g2,mj2` |
 | 4 | 拖入/传入视频后读取信息与缩略图 | PASS | 队列显示 00:06 / 2.13 MB / 1280×720 / H264 / 30 帧每秒 |
-| 5 | 不依赖源码目录与 `.venv` | PASS | 运行位置为 `%TEMP%\ffdist`，未引用项目路径 |
+| 5 | 不依赖源码目录与 `.venv` | PASS | 运行位置为 `<临时目录>`，未引用项目路径 |
 | 6 | 无多余控制台窗口 | PASS | `console=False`，`run.pyw` 内亦 `FreeConsole()` |
 
 截图：`docs/desktop-preview.png` 与本次实机截图一致（125% 缩放，窗口大于 1366×768 屏幕时会被系统裁切，属显示尺寸问题，非打包问题）。
