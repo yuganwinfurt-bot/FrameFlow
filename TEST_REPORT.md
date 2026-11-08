@@ -174,3 +174,83 @@ P0：无。P1：无。
 | R5 | 1366×768 下右栏需滚动（P2） |
 
 建议的顺序：搭 PyInstaller → 换真实素材复测 CRF 与提取音频 → 修 B1/B2 → 再上传。
+
+
+---
+
+# 附：最终验收记录（真实桌面环境 + PNG Alpha 排查）
+
+- 测试时间：2026-11-08 22:43–22:58
+- 环境：Windows 桌面会话（**非 offscreen**），窗口 1366×768，PySide6 6.12.0，FFmpeg 9.0.2
+- 交互方式：`QTest.mouseClick / mouseMove / mouseDClick / keyClick` 与 `QWheelEvent`，发送到真实窗口与真实控件；未直接调用槽函数
+- 判定口径：PASS=已实际执行并验证；FAIL=执行后不符合预期；SKIP=条件不满足；UNVERIFIED=当前环境无法可靠判定
+
+## 一、真实操作测试（16 项，全部 PASS）
+
+| # | 项目 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 点击播放，画面推进 | PASS | 帧号 1 → 13（1.5 s 内） |
+| 2 | 再次点击暂停 | PASS | 暂停后 13 → 13 |
+| 3 | 上一帧 / 下一帧 | PASS | 13 → 14 → 13 |
+| 4 | 时间轴点击定位 | PASS | 帧号跳到 13 |
+| 5 | 进入全屏 | PASS | `FullscreenPlayer.isFullScreen()=True` |
+| 6 | Esc 退出并保留进度 | PASS | 关闭后 `fullscreen_player=None`，帧号不变 |
+| 7 | 点击静音并恢复 | PASS | `playback_muted` True → False，电平回到 100 |
+| 8 | 音量浮层悬停出现/移开消失 | PASS | `shown=True`，移开后 `hidden=True` |
+| 9 | 音量点击定位（80/50/10 区间） | PASS | 83 / 49 / 5 |
+| 10 | 音量按住连续拖动 | PASS | 拖到高值后电平 83 |
+| 11 | 图片滚轮放大 | PASS | 缩放 1.00 → 1.33 |
+| 12 | 双击复位 | PASS | 回到 1.00 |
+| 13 | 批量转换实际执行 | PASS | 4 个任务均到「已完成」，源目录生成 `演示音频.mp3`(193 767 B)、`演示图片 (1).png`、`演示视频 1920 (1).mp4`、`演示视频 4K 风格 (1)(2).mp4` |
+| 14 | 不覆盖源文件 | PASS | 产物带 ` (1)`/` (2)` 后缀，源文件仍在 |
+| 15 | 取消后无临时文件残留 | PASS | 输出目录无 `.part/.tmp` |
+| 16 | 视频提取音频（真实音轨） | PASS | 源 6.00 s → 输出 `mp3` 6.000000 s、44 100 Hz、1 ch、145 595 B |
+
+## 二、本轮 FAIL 记录与复判
+
+| 项目 | 初次结果 | 复判原因 | 最终 |
+|---|---|---|---|
+| 进入全屏 | FAIL | 断言查的是编辑器窗口，实际全屏在独立 `FullscreenPlayer` | PASS（复测） |
+| 静音并恢复 | FAIL | 断言查 `playback_level`，静音只改 `playback_muted`、电平保留 | PASS（复测） |
+| 批量 5 文件 | FAIL(count=4) | 两个相同 PNG 被去重（既有行为，见 R4） | 4 个独立文件 PASS |
+
+## 三、仍未验证（UNVERIFIED）
+
+1. **音画同步**：无法在本环境用耳朵判定，只能确认播放时钟推进与音轨存在。
+2. **全屏下的播放与 Esc 后继续播放**：只验证了进入/退出与进度保留。
+3. **批量转换逐行指定不同格式**：脚本未能可靠地给每一行设置格式，实际产出的是默认格式；「同时混合 MP4/MKV/MOV/MP3/JPG」未验证。
+4. **取消任务的进度语义**：点击取消后进度停在 25% 而非归零，无残留文件；是否应先归零属交互约定问题，未改。
+5. **磁盘不足、文件被占用、无写权限**：未构造。
+6. **PyInstaller 打包与无 Python 机器启动**：仍未验证（环境无 PyInstaller）。
+
+## 四、PNG 透明通道：结论为「假阳性」，无代码改动
+
+`frameflow/media.py:501 _write_image()` 的实际分支：
+
+- `JPEG/BMP/PDF`：`convert("RGBA")` 后贴到白底 `Image.new("RGB", size, "white")` —— JPEG 不支持 Alpha，策略明确
+- `WEBP/AVIF/GIF`：转 `RGBA`，保留 Alpha
+- `PNG`：仅当模式不在 `{"1","L","LA","P","RGB","RGBA","I;16"}` 时才转 `RGBA` —— **RGBA 原样保存**
+
+回归验证（Pillow 读回，非看扩展名）：
+
+| 用例 | 输出模式 | Alpha | 结果 |
+|---|---|---|---|
+| RGBA PNG → PNG | RGBA | 有，extrema (0,255) | PASS |
+| 半透明 PNG → PNG | RGBA | 有，取样 alpha=128 原值保留 | PASS |
+| RGB PNG → PNG | RGB | 无（源本身无 Alpha） | PASS |
+| RGBA PNG → JPEG | RGB | 无（白底合成） | PASS |
+| RGBA PNG → WebP | RGBA | 有，extrema (0,255) | PASS |
+
+**上一轮报告的「透明通道丢失」是假阳性**：当时使用的样片 `演示图片.png` 本身就是 RGB 模式，输出 RGB 属正确行为。因此本轮**未修改任何图片编码代码**。
+
+## 五、回归与改动
+
+- 单元测试：`python -m unittest discover -s tests` → **Ran 33 tests ... OK**（42.9 s）
+- 代码改动：**无**（仅本文件追加测试记录）
+- 测试脚本：`%TEMP%\ffshot\final_alpha.py`、`final_gui.py`、`final_gui2.py`、`final_batch.py`、`final_extract.py`，均在临时目录，未进仓库
+
+## 六、是否存在阻止交付的 P0 / P1
+
+**没有 P0，没有 P1。** 已确认的失败项均为测试脚本断言写错或环境限制，功能侧未发现阻断级缺陷。
+
+仍建议在正式交付前补两项：真实人耳的音画同步抽检、以及一次 PyInstaller 打包后在无 Python 机器上的启动验证。
