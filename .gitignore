@@ -7,3 +7,6 @@ bin/*.dll
 *.lnk
 .idea/
 .vscode/
+dist/
+build/
+*.spec.bak

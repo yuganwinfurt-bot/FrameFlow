@@ -23,7 +23,9 @@ from PIL import Image, ImageOps
 # 在启动时注册图片编解码器，避免后台任务首次导出时并发导入插件。
 Image.init()
 
-PROJECT = Path(__file__).resolve().parents[1]
+_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+# PyInstaller 冻结后 __file__ 指向 _MEIPASS，优先用解包目录定位随包资源
+PROJECT = Path(getattr(__import__("sys"), "_MEIPASS", _SOURCE_ROOT))
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv",
                     ".ts", ".m4v", ".mpeg", ".mpg", ".mts", ".gif"}
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".wav", ".flac", ".aac", ".opus", ".ogg",

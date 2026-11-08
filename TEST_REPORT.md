@@ -254,3 +254,59 @@ P0：无。P1：无。
 **没有 P0，没有 P1。** 已确认的失败项均为测试脚本断言写错或环境限制，功能侧未发现阻断级缺陷。
 
 仍建议在正式交付前补两项：真实人耳的音画同步抽检、以及一次 PyInstaller 打包后在无 Python 机器上的启动验证。
+
+
+---
+
+# 附：Windows 打包与发行验证（2026-11-08 23:10）
+
+## 构建
+
+- 工具链：PyInstaller **6.22.3**（安装进 `.venv`，版本见 `requirements-dev` 说明不适用，未写入运行依赖）
+- 配置：`FrameFlow.spec`（onedir）+ `build_windows.bat`（可重复执行，不写死绝对路径）
+- 命令：`.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean FrameFlow.spec`
+- 结果：**成功**，`dist\FrameFlow\FrameFlow.exe`（含 `_internal\`），目录合计 **312.5 MB**
+- 打包时一并收入 `_internal\bin\ffmpeg.exe`（105 423 872 B）与 `_internal\bin\ffprobe.exe`（105 221 120 B）
+
+## 为兼容冻结环境所做的最小改动
+
+`frameflow/media.py` 顶部资源根：
+
+```python
+_SOURCE_ROOT = Path(__file__).resolve().parents[1]
+PROJECT = Path(getattr(__import__("sys"), "_MEIPASS", _SOURCE_ROOT))
+```
+
+冻结后 `_MEIPASS` 指向解包目录，`Tools.find()` 因此能在 `_MEIPASS/bin` 命中随包 FFmpeg；源码运行时行为不变（仍为项目根）。**未改动任何转换逻辑。**
+
+## 实机验证（从与源码无关的临时目录启动）
+
+把 `dist\FrameFlow` 整体复制到 `%TEMP%\ffdist` 后运行 `FrameFlow.exe`：
+
+| # | 项目 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | EXE 启动、主窗口完整 | PASS | 进程存活，窗口标题「帧转 FrameFlow · 媒体格式转换器」 |
+| 2 | 随包 FFmpeg 可用 | PASS | `_internal\bin\ffmpeg.exe -version` → `9.0.2-essentials` |
+| 3 | 随包 FFprobe 可用 | PASS | 对样片返回 `mov,mp4,m4a,3gp,3g2,mj2` |
+| 4 | 拖入/传入视频后读取信息与缩略图 | PASS | 队列显示 00:06 / 2.13 MB / 1280×720 / H264 / 30 帧每秒 |
+| 5 | 不依赖源码目录与 `.venv` | PASS | 运行位置为 `%TEMP%\ffdist`，未引用项目路径 |
+| 6 | 无多余控制台窗口 | PASS | `console=False`，`run.pyw` 内亦 `FreeConsole()` |
+
+截图：`docs/desktop-preview.png` 与本次实机截图一致（125% 缩放，窗口大于 1366×768 屏幕时会被系统裁切，属显示尺寸问题，非打包问题）。
+
+## 未验证（打包相关）
+
+- 未在**没有 Python 的独立机器**上验证；本次只是把发行目录移出源码树，系统仍装有 Python
+- 未验证代码签名与 SmartScreen 首次运行提示
+- 未验证杀毒软件误报情况
+- 未在 Windows 10 上验证（本机为 Windows 11）
+
+## 发行产物
+
+- `dist\FrameFlow\FrameFlow.exe` + `_internal\`
+- `dist\FrameFlow-Windows-x64.zip`：**119.6 MB**（解压 312.5 MB）
+- `FrameFlow.spec`、`build_windows.bat` 已入库，`dist/`、`build/` 由 `.gitignore` 排除
+
+## 结论
+
+打包链路可用，发行目录自包含（Python 运行时 + PySide6 + Pillow + FFmpeg 全在内）。仍建议在一台未装 Python 的机器上双击确认后再对外发送。
