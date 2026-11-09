@@ -4,16 +4,22 @@
 
 这是一个三天限时的 AI 桌面端开发笔试项目。客户端使用 PySide6 Widgets，媒体处理通过 FFmpeg、FFprobe 和 Pillow 完成。
 
-[下载安装包（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.0.1/FrameFlow-Setup-v1.0.1-Windows-x64.exe) · [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [测试报告](TEST_REPORT.md)
+[下载安装包（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Setup-v1.1.0-Windows-x64.exe) · [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [测试报告](TEST_REPORT.md)
 
 ## 下载和试用
 
 | 版本 | 下载 | 启动方式 |
 | --- | --- | --- |
-| **EXE 安装版（推荐）** | [v1.0.1 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.0.1/FrameFlow-Setup-v1.0.1-Windows-x64.exe) | 双击进入中文安装向导，选择安装目录。安装完成后可从开始菜单启动 |
-| 便携 ZIP | [v1.0.1 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.0.1/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
+| **EXE 安装版（推荐）** | [v1.1.0 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Setup-v1.1.0-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。安装完成后可从开始菜单启动 |
+| 便携 ZIP | [v1.1.0 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
 
-两种发行包均内置 Python 运行环境、PySide6 和 FFmpeg/FFprobe，可离线使用。**v1.0.1 修复了旧安装包的 QtCore DLL 加载错误**，可以覆盖升级。 [查看发行说明](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.0.1) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+两种发行包来自同一次 Windows x64 构建，内置 Python 运行环境、PySide6、Pillow 和 FFmpeg/FFprobe，可离线使用。v1.0.1 安装版用户可关闭 FrameFlow，再运行新版安装包覆盖升级。便携用户可把新版完整解压到独立目录。 [查看发行说明](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.1.0) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+
+### v1.1.0 更新
+
+- 「格式转换」和「媒体预览」之间切换时，队列平滑收缩或展开，播放器与输出设置作为真实 Qt 控件一起移动。
+- 宽窄队列采用统一的缩略图、选中效果和清空按钮布局。
+- 批量格式应用到兼容的队列项。转换页和预览页的自定义文件名会写入实际成品，同名时自动加序号。
 
 试用时，先拖入一个 MP4 文件，选中队列里的素材，在右侧设置输出格式和目录。点「开始转换」，完成后点「打开成品」。切到「媒体预览」可以逐帧查看并保存当前帧。
 
@@ -63,13 +69,13 @@
 
 ## 我怎样用 AI 开发和验收
 
-我确定客户端选型，用截图和实际操作给 AI 划定修改范围，再根据运行结果决定接受、继续修改或停止。比如，我要求同一文件设为 **H.265、720P、CRF 23** 后，切换转换页和预览页仍保留参数。实现复用了导出参数模型，回归用例同时检查了两页同步和不同文件之间的参数隔离。 [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [参数回归用例](tests/test_workflow.py#L664)
+我确定客户端选型，用截图和实际操作给 AI 划定修改范围，再根据运行结果决定接受、继续修改或停止。比如，我要求同一文件设为 **H.265、720P、CRF 23** 后，切换转换页和预览页仍保留参数。实现复用了导出参数模型，回归用例同时检查了两页同步和不同文件之间的参数隔离。 [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [参数回归用例](tests/test_workflow.py#L823)
 
 - [功能演进记录](SESSION_SUMMARY.md)｜需求变更、技术方案与阶段验证。
 - [界面改版记录](docs/session-2026-11-07.md)｜参考图、用户反馈、界面取舍与回归。
-- [测试报告](TEST_REPORT.md)｜交付记录含 33 项自动化回归与 16 项真实 Windows 窗口操作测试。媒体产物通过 FFprobe 或 Pillow 回读核对。
+- [测试报告](TEST_REPORT.md)｜最新业务回归在离屏和 Windows 原生窗口均为 44/44。v1.1.0 另实测了便携版、安装、覆盖升级及卸载。
 
-v1.0.1 在 Windows 本机另验了从旧安装包覆盖升级、主窗口启动和卸载。独立干净机器上的启动和人耳判断声画同步仍待验证。 [v1.0.1 发行说明](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.0.1)
+独立无 Python 的干净机器和人耳判断声画同步仍待验证。 [验收记录](TEST_REPORT.md)
 
 ## 从源码运行
 
@@ -92,7 +98,13 @@ py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-如需复现 v1.0.1 的便携构建，运行 `git switch --detach v1.0.1`，再运行 `.\build_windows.bat`。脚本调用 PyInstaller，生成 `dist\FrameFlow\FrameFlow.exe` 和随附运行文件。 [v1.0.1 打包配置](https://github.com/yuganwinfurt-bot/FrameFlow/blob/v1.0.1/FrameFlow.spec)
+如需构建 Windows 运行目录，可运行 `.\build_windows.bat`。生成 ZIP 和安装包时，使用 64 位 Python 环境中的 PyInstaller 和 NSIS 3.13，在干净的源码提交上运行以下命令。指定的输出目录应尚未创建。
+
+```powershell
+.\.venv\Scripts\python.exe .\packaging\package_windows.py --makensis "C:\path\to\makensis.exe" --output .\dist\release
+```
+
+脚本生成两个发行包及 `BUILD_INFO.txt`，记录构建提交、工具版本、文件大小和 SHA-256。 [PyInstaller 配置](FrameFlow.spec) · [NSIS 安装脚本](packaging/FrameFlow.nsi)
 
 ## 许可证
 
