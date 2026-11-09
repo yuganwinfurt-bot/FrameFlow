@@ -124,6 +124,8 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.assertTrue(self.page.isHidden())
 
     def test_attachment_drag_and_messages(self):
+        self.page.submitted.disconnect(self.window.agent_session.submit)
+        self.page.before_submit = lambda: True
         self.nav(2)
         self.settle()
         rail = self.window.preview_files

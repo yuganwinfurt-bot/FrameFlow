@@ -7,7 +7,7 @@ import math
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy, QTextBrowser,
+    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QTextBrowser,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -159,6 +159,7 @@ class AgentPage(QFrame):
         self.pending_signature = ()
         self.bubbles = []
         self.busy = False
+        self.before_submit = lambda: True
         self.setObjectName("agentWorkspace")
         self.setAcceptDrops(True)
         self.setStyleSheet(f"""
@@ -298,7 +299,7 @@ class AgentPage(QFrame):
 
     def send(self):
         self.refresh_attachments()
-        if not self.send_button.isEnabled():
+        if not self.send_button.isEnabled() or not self.before_submit():
             return
         text = self.input.toPlainText().strip()
         items = tuple(self.lookup(key) for key in self.pending)

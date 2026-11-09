@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from .agent import AgentSession
 from .agent_ui import AgentPage, Attachment
 from .media import (AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, LOSSLESS_AUDIO_FORMATS, VIDEO_EXTENSIONS,
                     VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS, WAVEFORM_SECONDS)
@@ -720,7 +721,7 @@ class MainWindow(QMainWindow):
         self._build_preview_rail()
         self.agent_page = AgentPage(self._agent_attachment)
         self.agent_page.attachments_requested.connect(self._choose_agent_attachments)
-        self.agent_page.clear_requested.connect(self.agent_page.clear_history)
+        self.agent_session = AgentSession(self.agent_page, self)
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageWorkspace")
         self.pages.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
@@ -2338,6 +2339,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.closing = True
+        self.agent_session.shutdown()
         self.page_transition.animation.stop()
         self.page_transition.agent_animation.stop()
         for editor in self.editors.values():
