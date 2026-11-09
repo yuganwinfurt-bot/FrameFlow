@@ -12,7 +12,7 @@ from pathlib import Path
 from .media import (HARDWARE_BACKENDS, AudioInfo, Cancelled, Export, ImageInfo, MediaError,
                     Processes, Tools, VideoInfo, audio_encoder_args, video_encoder_args)
 from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _publish, _save_image_to_limit,
-                    _with_bitrates, convert, probe, resolve_output_stem)
+                    _with_bitrates, convert, output_extension, probe, resolve_output_stem)
 
 
 @dataclass(frozen=True)
@@ -295,7 +295,7 @@ def render_edit(source, video, audio, fps, options: Export, tools: Tools, scope:
         raise MediaError("需要至少一段音频和一种音频格式。")
     stem = target.stem if target is not None else resolve_output_stem(options.output_stem, f"{source.stem}_编辑")
     directory = target.parent if target is not None else options.directory or source.parent
-    extension = "mkv" if kind == "mkv_hevc" else kind
+    extension = output_extension(kind)
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".frameflow-edit-", dir=directory) as folder:
         temp = Path(folder) / ("edit.mkv" if kind == "gif" else f"edit.{extension}")

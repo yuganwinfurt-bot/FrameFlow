@@ -79,6 +79,8 @@
 
 ## 从源码运行
 
+开发分支的第三个工作区支持通过云端模型调用队列和转换工具。配置方式、目录授权和确认流程见 [AI Agent 使用说明](docs/ai-agent.md)。
+
 ```powershell
 git clone https://github.com/yuganwinfurt-bot/FrameFlow.git
 cd FrameFlow

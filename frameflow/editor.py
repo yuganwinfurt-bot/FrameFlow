@@ -26,6 +26,7 @@ from .editing import (Clip, Frames, VideoSource, audio_preview, audio_segment, f
 from .details import DetailsView
 from .filmstrip import EDIT_KEYS, Filmstrip
 from . import icons
+from .media import output_extension
 from .media import (AUDIO_EXTENSIONS, HARDWARE_BACKENDS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
                     AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
                     hardware_acceleration_choices)
@@ -2206,10 +2207,10 @@ class Editor(QDialog):
         self.export_fields.setRowVisible(self.export_dimensions, show and self.settings_body.width() >= 337)
         self._refresh_estimate()
 
-    _CONTAINER_TITLES = {"mp4": "MP4", "mov": "MOV", "mkv": "MKV", "mkv_hevc": "MKV",
+    _CONTAINER_TITLES = {"mp4": "MP4", "mp4_hevc": "MP4", "mov": "MOV", "mkv": "MKV", "mkv_hevc": "MKV",
                          "webm": "WEBM", "avi": "AVI"}
     _CODEC_TITLES = {"mp4": "H.264 (AVC)", "mov": "H.264 (AVC)", "mkv": "H.264 (AVC)",
-                     "mkv_hevc": "H.265 (HEVC)", "webm": "VP9", "avi": "MPEG-4"}
+                     "mkv_hevc": "H.265 (HEVC)", "mp4_hevc": "H.265 (HEVC)", "webm": "VP9", "avi": "MPEG-4"}
 
     def _uses_video_picker(self):
         return isinstance(self.info, VideoInfo) and (
@@ -2488,7 +2489,7 @@ class Editor(QDialog):
             return
         page = self.tabs.currentWidget() if hasattr(self, "tabs") else None
         kind = self.image_format.currentData() if page is self.image_page else self.format.currentData()
-        extension = {"mkv_hevc": "mkv", "gif_image": "gif"}.get(kind, kind or "mp4")
+        extension = output_extension(kind or "mp4")
         if page is self.image_page and self.video_page is not None:
             stem = f"{self.path.stem}_帧{self._picture_frame_number():06}"
         elif page is self.image_page:
@@ -2741,7 +2742,7 @@ class Editor(QDialog):
                       audio_channels=int(self.audio_channels.currentData() or 0),
                       output_stem=self._get_output_stem())
 
-    def apply_output_options(self, options):
+    def apply_output_options(self, options, *, apply_image_quality=False):
         with QSignalBlocker(self):
             self.set_output_format(options.format)
             image = isinstance(self.info, ImageInfo)
@@ -2753,6 +2754,8 @@ class Editor(QDialog):
             edge_combo.setCurrentIndex(max(0, edge_index))
             if image:
                 self.size.setValue(options.target_bytes // 1000)
+                if apply_image_quality and options.quality and hasattr(self, "image_quality"):
+                    self.image_quality.setValue(options.quality)
                 if options.target_bytes:
                     self.picture_preset.setCurrentIndex(2)
             else:
@@ -2977,6 +2980,7 @@ class Editor(QDialog):
         fps = self.frames.fps
         formats = {
             "MP4 视频 (*.mp4)": ("mp4", "mp4"),
+            "MP4 视频 H.265 (*.mp4)": ("mp4_hevc", "mp4"),
             "MKV 视频 H.264 (*.mkv)": ("mkv", "mkv"),
             "MKV 视频 H.265 (*.mkv)": ("mkv_hevc", "mkv"),
             "MOV 视频 (*.mov)": ("mov", "mov"),
@@ -2995,7 +2999,8 @@ class Editor(QDialog):
         target, suffix = self._target_from_dialog(filename, chosen or initial_filter, extensions)
         if not target:
             return
-        kind = "mkv_hevc" if suffix == "mkv" and chosen == "MKV 视频 H.265 (*.mkv)" else suffix
+        selected_kind, selected_suffix = formats.get(chosen, (suffix, suffix))
+        kind = selected_kind if suffix == selected_suffix else suffix
         if kind not in _ENCODERS:
             self._notice("请选择支持的视频格式。")
             return

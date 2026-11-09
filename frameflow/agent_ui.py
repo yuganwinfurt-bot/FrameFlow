@@ -4,10 +4,10 @@ from dataclasses import dataclass
 import json
 import math
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap, QTextDocument, QTextOption
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QTextBrowser,
+    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy, QTextBrowser,
     QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -73,6 +73,13 @@ class MessageText(QTextBrowser):
         if markdown:
             self.document().setMarkdown(text, QTextDocument.MarkdownFeature.MarkdownNoHTML |
                                        QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
+            block = self.document().begin()
+            while block.isValid():
+                style = block.blockFormat()
+                if style.nonBreakableLines():
+                    style.setNonBreakableLines(False)
+                    QTextCursor(block).setBlockFormat(style)
+                block = block.next()
         else:
             self.setPlainText(text)
 
@@ -89,6 +96,7 @@ class Bubble(QFrame):
     def __init__(self, text, user, attachments):
         super().__init__()
         self.user = user
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setObjectName("agentUserBubble" if user else "agentReplyBubble")
         self.setAccessibleName("用户消息" if user else "AI 回复")
         layout = QVBoxLayout(self)
@@ -158,6 +166,7 @@ class AgentPage(QFrame):
         self.pending = ()
         self.pending_signature = ()
         self.bubbles = []
+        self.follow_history = True
         self.busy = False
         self.before_submit = lambda: True
         self.setObjectName("agentWorkspace")
@@ -167,7 +176,8 @@ class AgentPage(QFrame):
                                     border-radius: 12px; }}
             QFrame#agentWorkspace[dragging="true"] {{ border: 2px solid {C.accent.name()}; }}
             QFrame#agentUserBubble {{ background: {C.accent_soft.name()}; border-radius: 12px; }}
-            QFrame#agentReplyBubble, QFrame#agentAttachment {{ background: {C.sunken.name()}; border-radius: 9px; }}
+            QFrame#agentReplyBubble, QFrame#agentAttachment, QFrame#agentPlan {{
+                background: {C.sunken.name()}; border-radius: 9px; }}
             QTextBrowser#agentMessageText {{ background: transparent; border: 0; padding: 0; }}
             QFrame#agentComposer {{ background: {C.surface.name()}; border: 1px solid {C.border.name()}; border-radius: 12px; }}
             QFrame#agentComposer QTextEdit {{ background: transparent; border: 0; }}
@@ -213,6 +223,9 @@ class AgentPage(QFrame):
         self.messages.addWidget(self.welcome)
         self.messages.addStretch()
         self.history.setWidget(body)
+        scroll_bar = self.history.verticalScrollBar()
+        scroll_bar.valueChanged.connect(self._history_scrolled)
+        scroll_bar.rangeChanged.connect(self._history_range_changed)
         layout.addWidget(self.history, 1)
 
         self.activity = text_label("")
@@ -313,30 +326,38 @@ class AgentPage(QFrame):
         bubble = Bubble(text, user, attachments)
         self.bubbles.append(bubble)
         self.add_history_widget(bubble, right=user)
-        bubble.fit(self.history.viewport().width())
         return bubble
 
     def add_history_widget(self, widget, *, right=False):
-        bar = self.history.verticalScrollBar()
-        follow = bar.maximum() - bar.value() < 16
         self.welcome.hide()
+        if isinstance(widget, (Bubble, PlanCard)):
+            widget.fit(self.history.viewport().width())
         self.messages.insertWidget(self.messages.count() - 1, widget, alignment=(
             Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft))
-        if follow:
-            QTimer.singleShot(0, self, lambda: bar.setValue(bar.maximum()))
 
-    def clear_history(self):
-        while self.messages.count() > 2:
-            widget = self.messages.takeAt(1).widget()
-            widget.hide()
-            widget.deleteLater()
+    def _history_scrolled(self, value):
+        self.follow_history = self.history.verticalScrollBar().maximum() - value < 12
+
+    def _history_range_changed(self, _minimum, maximum):
+        if self.follow_history:
+            self.history.verticalScrollBar().setValue(maximum)
+
+    def clear_history(self, keep=None):
+        self.follow_history = True
+        for index in range(self.messages.count() - 2, 0, -1):
+            if self.messages.itemAt(index).widget() is not keep:
+                widget = self.messages.takeAt(index).widget()
+                widget.hide()
+                widget.deleteLater()
         self.bubbles.clear()
-        self.welcome.show()
+        self.welcome.setVisible(keep is None)
 
     def eventFilter(self, obj, event):
         if obj is self.history.viewport() and event.type() == QEvent.Type.Resize:
-            for bubble in self.bubbles:
-                bubble.fit(event.size().width())
+            for index in range(1, self.messages.count() - 1):
+                widget = self.messages.itemAt(index).widget()
+                if isinstance(widget, (Bubble, PlanCard)):
+                    widget.fit(event.size().width())
         return super().eventFilter(obj, event)
 
     def _drag_keys(self, mime):
@@ -378,3 +399,93 @@ class AgentPage(QFrame):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+
+class PlanCard(QFrame):
+    confirm_requested = Signal()
+    cancel_requested = Signal()
+
+    def __init__(self, rows):
+        super().__init__()
+        self.setObjectName("agentPlan")
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.rows = {}
+        self.paths = []
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 9, 12, 9)
+        self.title = text_label(f"转换计划 · {len(rows)} 个文件 · 保留原文件")
+        self.title.setObjectName("fieldLabel")
+        outer.addWidget(self.title)
+        body = QWidget()
+        self.content = QVBoxLayout(body)
+        self.content.setContentsMargins(0, 0, 5, 0)
+        self.content.setSpacing(3)
+        for key, text, directory in rows:
+            summary = text_label(text)
+            summary.setWordWrap(True)
+            self.content.addWidget(summary)
+            path = text_label("")
+            path.setProperty("muted", True)
+            path.setToolTip(directory)
+            path.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            self.content.addWidget(path)
+            self.paths.append((path, directory))
+            status = text_label("")
+            status.setWordWrap(True)
+            status.setProperty("muted", True)
+            status.hide()
+            self.content.addWidget(status)
+            progress = QProgressBar()
+            progress.setRange(0, 100)
+            progress.setFixedHeight(6)
+            progress.setTextVisible(False)
+            progress.hide()
+            self.content.addWidget(progress)
+            self.rows[key] = status, progress
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("agentPending")
+        body.setObjectName("agentPendingBody")
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setWidget(body)
+        outer.addWidget(self.scroll)
+        buttons = QHBoxLayout()
+        self.confirm = Button("确认执行")
+        self.confirm.setObjectName("primary")
+        self.confirm.clicked.connect(self.confirm_requested)
+        buttons.addWidget(self.confirm)
+        self.cancel = Button("取消")
+        self.cancel.clicked.connect(self.cancel_requested)
+        buttons.addWidget(self.cancel)
+        buttons.addStretch()
+        outer.addLayout(buttons)
+
+    def fit(self, width):
+        self.setFixedWidth(min(650, max(330, int(width * .75))))
+        for label, directory in self.paths:
+            label.setText(label.fontMetrics().elidedText(directory, Qt.TextElideMode.ElideMiddle, self.width() - 50))
+        self._fit_rows()
+
+    def _fit_rows(self):
+        self.content.activate()
+        height = self.content.heightForWidth(max(300, self.width() - 45))
+        self.scroll.setFixedHeight(min(220, max(48, height + 6)))
+
+    def started(self):
+        self.title.setText("正在转换…")
+        self.confirm.hide()
+        self.cancel.setText("取消转换")
+
+    def finished(self, text):
+        self.title.setText(text)
+        self.confirm.hide()
+        self.cancel.hide()
+
+    def update_row(self, key, text, percent):
+        label, progress = self.rows[key]
+        label.setText(text)
+        label.show()
+        progress.setValue(percent)
+        progress.show()
+        self._fit_rows()

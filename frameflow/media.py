@@ -79,6 +79,10 @@ def resolve_output_stem(custom: str, default: str) -> str:
     return custom
 
 
+def output_extension(kind: str) -> str:
+    return {"mp4_hevc": "mp4", "mkv_hevc": "mkv", "gif_image": "gif"}.get(kind, kind)
+
+
 @dataclass(frozen=True)
 class Tools:
     ffmpeg: str
@@ -430,6 +434,8 @@ def thumbnail(path: Path, info: MediaInfo, tools: Tools, scope: Processes) -> by
 _ENCODERS = {
     "mp4": ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac",
             "-movflags", "+faststart"],
+    "mp4_hevc": ["-c:v", "libx265", "-preset", "fast", "-crf", "26", "-c:a", "aac",
+                 "-tag:v", "hvc1", "-movflags", "+faststart"],
     "mov": ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac"],
     "mkv": ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac"],
     "mkv_hevc": ["-c:v", "libx265", "-preset", "fast", "-crf", "26", "-c:a", "aac"],
@@ -470,7 +476,7 @@ def _available_encoder_names(ffmpeg: str) -> frozenset[str]:
 
 def hardware_acceleration_choices(ffmpeg: str, format_name: str) -> list[tuple[str, str]]:
     """返回当前 FFmpeg 构建支持的硬件编码器；设备或驱动不可用时导出会回退 CPU。"""
-    codec = "hevc" if format_name == "mkv_hevc" else "h264" if format_name in {"mp4", "mov", "mkv"} else None
+    codec = _hardware_codec(format_name)
     choices = [("cpu", "CPU 软件编码")]
     if codec is None:
         return choices
@@ -478,6 +484,12 @@ def hardware_acceleration_choices(ffmpeg: str, format_name: str) -> list[tuple[s
     choices.extend((backend, title) for backend, title in HARDWARE_BACKENDS
                     if _HARDWARE_ENCODER_NAMES[backend][codec] in available)
     return choices
+
+
+def _hardware_codec(format_name: str) -> str | None:
+    if format_name in {"mp4_hevc", "mkv_hevc"}:
+        return "hevc"
+    return "h264" if format_name in {"mp4", "mov", "mkv"} else None
 
 
 def video_encoder_args(format_name: str, acceleration: str = "cpu", quality: int = 0,
@@ -503,7 +515,7 @@ def _video_encoder_args(format_name: str, acceleration: str = "cpu", quality: in
         if quality and "-crf" in base:
             base[base.index("-crf") + 1] = str(int(quality))
         return base
-    codec = "hevc" if format_name == "mkv_hevc" else "h264" if format_name in {"mp4", "mov", "mkv"} else None
+    codec = _hardware_codec(format_name)
     if codec is None or acceleration not in _HARDWARE_ENCODER_NAMES:
         raise MediaError("所选输出格式不支持此编码加速。")
     video_encoder = _HARDWARE_ENCODER_NAMES[acceleration][codec]
@@ -674,7 +686,7 @@ def convert(
     progress: Callable[[int], None], *, notice: Callable[[str], None] = lambda _message: None,
 ) -> Path:
     kind = options.format
-    extension = {"mkv_hevc": "mkv", "gif_image": "gif"}.get(kind, kind)
+    extension = output_extension(kind)
     if isinstance(info, ImageInfo):
         if kind not in _IMAGE_FORMATS:
             raise MediaError("请选择支持的图片输出格式。")

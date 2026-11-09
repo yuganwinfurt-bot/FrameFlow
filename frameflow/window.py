@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import AgentSession
+from .agent_tools import AgentTools
 from .agent_ui import AgentPage, Attachment
 from .media import (AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, LOSSLESS_AUDIO_FORMATS, VIDEO_EXTENSIONS,
                     VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS, WAVEFORM_SECONDS)
@@ -32,7 +33,7 @@ from .media import AudioInfo, ImageInfo, VideoInfo
 from .icons import INK, icon as line_icon, pixmap as line_pixmap
 from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
-from .media import convert, filename_problem, media_path_missing, probe, thumbnail
+from .media import convert, filename_problem, media_path_missing, output_extension, probe, thumbnail
 from .details import DetailsDialog
 from .motion import (QUEUED_MEDIA, QUEUED_MEDIA_BATCH, Button, Combo, DirectoryButton, DropArea, Motion,
                      NavigationBar, PageTransition, QualityRow, SpinBox, local_files)
@@ -50,7 +51,8 @@ RAIL_MIN_WIDTH = 232
 CONVERSION_FOOTER_HEIGHT = 65
 PREVIEW_FOOTER_HEIGHT = 56
 
-VIDEO_FORMATS = (("mp4", "MP4 · H.264"), ("mkv_hevc", "MKV · H.265"), ("mkv", "MKV · H.264"),
+VIDEO_FORMATS = (("mp4", "MP4 · H.264"), ("mp4_hevc", "MP4 · H.265"),
+                 ("mkv_hevc", "MKV · H.265"), ("mkv", "MKV · H.264"),
                  ("webm", "WebM · VP9"), ("mov", "MOV · H.264"), ("avi", "AVI · MPEG-4"), ("gif", "GIF · 动图"))
 AUDIO_FORMATS = (("mp3", "MP3"), ("m4a", "M4A · AAC"), ("wav", "WAV · PCM"),
                  ("flac", "FLAC · 无损"), ("opus", "Opus"), ("ogg", "OGG · Vorbis"))
@@ -681,6 +683,7 @@ class MainWindow(QMainWindow):
         self.details_dialog: DetailsDialog | None = None
         self.output_directory: Path | None = None
         self.scope: Processes | None = None
+        self.batch_keys = ()
         self.inspections = Processes()
         self.reader_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="frameflow-read")
         self.export_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-export")
@@ -721,7 +724,8 @@ class MainWindow(QMainWindow):
         self._build_preview_rail()
         self.agent_page = AgentPage(self._agent_attachment)
         self.agent_page.attachments_requested.connect(self._choose_agent_attachments)
-        self.agent_session = AgentSession(self.agent_page, self)
+        self.agent_tools = AgentTools(self, formats_for)
+        self.agent_session = AgentSession(self.agent_page, self, tools=self.agent_tools)
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageWorkspace")
         self.pages.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
@@ -1286,7 +1290,7 @@ class MainWindow(QMainWindow):
         self.preview_files = PreviewFiles(self._queued_media)
         self.preview_files.setObjectName("previewFiles")
         self.preview_files.setAccessibleName("媒体预览文件")
-        self.preview_files.setToolTip("单击切换文件，按住左键拖到视频帧或音轨")
+        self.preview_files.setToolTip("单击切换文件。拖到时间线或 AI Agent；在 Agent 中可按 Ctrl 多选。")
         self.preview_files.setIconSize(THUMB_SIZE)
         self.preview_files.setFrameShape(QFrame.Shape.NoFrame)
         self.preview_files.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -1487,13 +1491,7 @@ class MainWindow(QMainWindow):
             self._show_page(self._editor_for(selected) or self.empty_preview)
 
     def _job_extension(self, job) -> str:
-        kind = job.output_format or ""
-        return {"mkv_hevc": "mkv", "gif_image": "gif", "mp4": "mp4", "mkv": "mkv",
-                "webm": "webm", "mov": "mov", "avi": "avi", "gif": "gif",
-                "mp3": "mp3", "m4a": "m4a", "wav": "wav", "flac": "flac",
-                "opus": "opus", "ogg": "ogg", "png": "png", "jpg": "jpg",
-                "webp": "webp", "avif": "avif", "tiff": "tiff", "bmp": "bmp",
-                "ico": "ico", "pdf": "pdf"}.get(kind, kind or "mp4")
+        return output_extension(job.output_format or "mp4")
 
     def _output_stem_edited(self, text: str) -> None:
         if job := self._selected():
@@ -1640,7 +1638,7 @@ class MainWindow(QMainWindow):
         formats = {job.output_format for job in self.jobs.values() if job.queued and job.output_format}
         video_formats = sorted({job.output_format for job in self.jobs.values()
                                 if job.queued and isinstance(job.info, VideoInfo)
-                                and job.output_format in {"mp4", "mkv", "mkv_hevc", "mov"}})
+                                and job.output_format in {"mp4", "mp4_hevc", "mkv", "mkv_hevc", "mov"}})
         current_acceleration = self.acceleration.currentData() or "cpu"
         available_by_format = [dict(hardware_acceleration_choices(self.tools.ffmpeg, kind))
                                for kind in video_formats] if self.tools and video_formats else []
@@ -1742,7 +1740,7 @@ class MainWindow(QMainWindow):
                         get_output_stem=lambda: job.output_stem)
         editor.set_output_format(job.output_format)
         if job.output_format:
-            editor.apply_output_options(self._job_export(job))
+            editor.apply_output_options(self._job_export(job), apply_image_quality=job.export_settings is not None)
         if isinstance(job.info, VideoInfo) and job.picture is not None:
             editor.frame_view.set_picture(job.picture)
         editor.saved.connect(self._register_editor_output)
@@ -2190,6 +2188,19 @@ class MainWindow(QMainWindow):
         options = job.export_settings or self._batch_options(job)
         return replace(options, format=job.output_format, output_stem=job.output_stem)
 
+    def _apply_agent_options(self, job, options):
+        job.export_settings = options
+        job.output_format = options.format
+        combo = self.rows[job.key].format
+        with QSignalBlocker(combo):
+            combo.setCurrentIndex(combo.findData(options.format))
+        if editor := self.editors.get(job.key):
+            editor.apply_output_options(options, apply_image_quality=True)
+        if job.output_stem != options.output_stem:
+            self._set_output_stem(job, options.output_stem)
+        self._show_selected()
+        self._refresh_controls()
+
     def _show_batch_settings(self):
         before = (self.resolution.currentData(), self.output_fps.currentData(), self.acceleration.currentData(),
                   self.gif_preset.currentData(), self.target_size.value(), self.quality.value(), self.output_directory)
@@ -2235,9 +2246,13 @@ class MainWindow(QMainWindow):
         self._prune_missing()
         tasks = [(job.key, job.path, job.info, self._job_export(job))
                  for job in self.jobs.values() if job.queued and job.info and job.output_format]
-        if not tasks:
-            return
+        self._start_batch(tasks)
+
+    def _start_batch(self, tasks) -> bool:
+        if not tasks or self.closing or self.tools is None or self.scope is not None:
+            return False
         self.scope = Processes()
+        self.batch_keys = tuple(key for key, _, _, _ in tasks)
         self.pending_outputs = []
         self.total, self.finished, self.failed = len(tasks), 0, 0
         for key, _, _, _ in tasks:
@@ -2250,6 +2265,7 @@ class MainWindow(QMainWindow):
         self.status.setText(f"正在转换 {self.total} 个文件…")
         self._refresh_controls()
         self.export_pool.submit(self._run_batch, tasks, self.tools, self.scope)
+        return True
 
     def _run_batch(self, tasks, tools: Tools, scope: Processes) -> None:
         try:

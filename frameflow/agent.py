@@ -61,12 +61,14 @@ class ModelDialog(QDialog):
 
     def accept(self):
         config = self.config()
-        if config.api_key:
-            try:
+        try:
+            if config.api_key:
                 config.endpoint()
-            except ValueError as exc:
-                self.note.setText(str(exc))
-                return
+            elif config.base_url:
+                config.completion_url()
+        except ValueError as exc:
+            self.note.setText(str(exc))
+            return
         super().accept()
 
     def done(self, result):
@@ -126,16 +128,19 @@ class AgentSession(QObject):
             try:
                 self.settings.save(config)
             except OSError:
-                self.page.set_activity("无法保存 API 设置。请检查当前 Windows 用户的凭据权限。")
+                note = "当前 Windows 用户无法保存凭据。API 配置仅在本次运行有效。"
             else:
-                if config != self.config:
-                    # A different endpoint or model should not receive an earlier provider's context.
-                    self.history.clear()
-                    self.validated = None
-                self.config = config
-                if dialog.tested == config:
-                    self.validated = config
-                self.page.set_activity("API 设置已保存。" if config.api_key else "已清除 API Key。")
+                note = "API 设置已保存。" if config.api_key else "已清除 API Key。"
+            if config != self.config:
+                # A different endpoint or model should not receive an earlier provider's context.
+                self.history.clear()
+                self.validated = None
+                if self.tools:
+                    self.tools.clear_pending()
+            self.config = config
+            if dialog.tested == config:
+                self.validated = config
+            self.page.set_activity(note)
         dialog.deleteLater()
 
     def _can_send(self):
@@ -247,7 +252,8 @@ class AgentSession(QObject):
     def clear(self):
         self.stop()
         self.history.clear()
-        self.page.clear_history()
+        keep = self.tools.clear_pending() if self.tools else None
+        self.page.clear_history(keep)
         self.page.set_activity("")
 
     def shutdown(self):
