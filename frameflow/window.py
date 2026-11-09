@@ -1252,18 +1252,21 @@ class MainWindow(QMainWindow):
         panel.addWidget(frame)
         return header, count, add
 
-    def _add_queue_footer(self, panel):
+    def _add_queue_footer(self, panel, *, full_width=False):
         footer = QFrame()
         footer.setObjectName("queueFooter")
         actions = QHBoxLayout(footer)
-        actions.setContentsMargins(12, 6, 12, 8)
+        actions.setContentsMargins(12, 6, 12, 12 if full_width else 8)
         clear = Button("清空列表")
         clear.setIcon(line_icon("trash", 16))
         clear.setIconSize(QSize(16, 16))
         clear.setToolTip("移除队列里的全部文件")
         clear.clicked.connect(self._clear_jobs)
         actions.addWidget(clear)
-        actions.addStretch(1)
+        if full_width:
+            clear.setMinimumHeight(36)
+        else:
+            actions.addStretch(1)
         panel.addWidget(footer)
         return clear
 
@@ -1286,7 +1289,7 @@ class MainWindow(QMainWindow):
         self.preview_files.currentItemChanged.connect(self._preview_file_changed)
         rail.addWidget(self.preview_files, 1)
 
-        self.rail_clear = self._add_queue_footer(rail)
+        self.rail_clear = self._add_queue_footer(rail, full_width=True)
 
     def eventFilter(self, widget, event):
         if event.type() == QEvent.Type.Show and widget in (self.list, self.preview_files):
