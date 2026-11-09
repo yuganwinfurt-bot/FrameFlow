@@ -47,7 +47,7 @@ def _mix(start: QColor, end: QColor, amount: float) -> QColor:
 
 
 class NavigationBar(QTabBar):
-    """带蓝色滑动指示线的两段导航。"""
+    """带蓝色滑动指示线的导航。"""
 
     def __init__(self):
         super().__init__()
@@ -94,7 +94,7 @@ class NavigationBar(QTabBar):
             width = painter.fontMetrics().horizontalAdvance(title)
             left = rect.center().x() - (width + 24) // 2
             painter.drawPixmap(left, rect.center().y() - 9,
-                               line_pixmap("gear" if index == 0 else "video", 18, ink.name(), 1.9))
+                               line_pixmap(("gear", "video", "robot")[index], 18, ink.name(), 1.9))
             painter.setPen(ink)
             painter.drawText(rect.adjusted(left - rect.left() + 24, 0, 0, 0),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
@@ -110,31 +110,41 @@ class PageTransition(QLayout):
 
     settings_location_changed = Signal(bool)
     settled = Signal()
+    navigation_position = Signal(float)
 
-    def __init__(self, parent, queue, rail, conversion_settings, workspace, rail_width):
+    def __init__(self, parent, queue, rail, conversion_settings, workspace, rail_width, agent):
         super().__init__(parent)
         self._items = []
         self.queue = queue
         self.rail = rail
         self.conversion_settings = conversion_settings
         self.workspace = workspace
+        self.agent = agent
         self.rail_width = rail_width
         self.target_preview = False
+        self.target_agent = False
         self.settings_in_preview = False
         self.setContentsMargins(18, 12, 18, 12)
         self.setSpacing(10)
-        for widget in (queue, rail, conversion_settings, workspace):
+        for widget in (queue, rail, conversion_settings, workspace, agent):
             self.addWidget(widget)
         self.workspace.hide()
         self.workspace.raise_()
+        self.agent.hide()
+        self.agent.raise_()
 
-        self.animation = QVariantAnimation(self)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(1.0)
-        self.animation.setDuration(360)
-        self.animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        self.animation.valueChanged.connect(self._relayout)
-        self.animation.finished.connect(self.settled)
+        self.animation = self._animation()
+        self.agent_animation = self._animation()
+
+    def _animation(self):
+        animation = QVariantAnimation(self)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(360)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        animation.valueChanged.connect(self._relayout)
+        animation.finished.connect(self._settle)
+        return animation
 
     def addItem(self, item):
         self._items.append(item)
@@ -157,22 +167,51 @@ class PageTransition(QLayout):
 
     @property
     def running(self):
-        return self.animation.state() != QAbstractAnimation.State.Stopped
+        return any(animation.state() != QAbstractAnimation.State.Stopped
+                   for animation in (self.animation, self.agent_animation))
 
-    def move_to(self, preview):
-        if self.target_preview == preview:
+    @property
+    def agent_position(self):
+        return float(self.agent_animation.currentValue())
+
+    def move_to(self, preview, agent=False):
+        if (self.target_preview, self.target_agent) == (preview, agent):
             return
         self.target_preview = preview
+        self.target_agent = agent
         if not self.parentWidget().isVisible():
             self._finish()
             return
-        self.animation.setDirection(QAbstractAnimation.Direction.Forward if preview
-                                    else QAbstractAnimation.Direction.Backward)
+        if not preview:
+            # 两个可见的右侧工作区一起随外层退出。
+            self.agent_animation.stop()
+        elif not self.position:
+            self.agent_animation.stop()
+            self.agent_animation.setCurrentTime(self.agent_animation.duration() if agent else 0)
+        else:
+            self._drive(self.agent_animation, agent)
+        self._drive(self.animation, preview)
+
+    @staticmethod
+    def _drive(animation, forward):
+        current = animation.currentTime()
+        animation.setDirection(QAbstractAnimation.Direction.Forward if forward
+                               else QAbstractAnimation.Direction.Backward)
+        endpoint = animation.duration() if forward else 0
+        if animation.state() == QAbstractAnimation.State.Stopped and current != endpoint:
+            animation.start()
+            animation.setCurrentTime(current)
+
+    def _settle(self):
         if not self.running:
-            self.animation.start()
+            if not self.target_preview:
+                self.agent_animation.setCurrentTime(0)
+            self.settled.emit()
 
     def _finish(self):
         self.animation.stop()
+        self.agent_animation.stop()
+        self.agent_animation.setCurrentTime(self.agent_animation.duration() if self.target_agent else 0)
         self.animation.setCurrentTime(self.animation.duration() if self.target_preview else 0)
         self._relayout(self.position)
         self.settled.emit()
@@ -182,7 +221,7 @@ class PageTransition(QLayout):
 
     def setGeometry(self, bounds):
         super().setGeometry(bounds)
-        if not bounds.isValid() or not hasattr(self, "animation"):
+        if not bounds.isValid() or not hasattr(self, "agent_animation"):
             return
         area = self.contentsRect()
         position = self.position
@@ -207,6 +246,9 @@ class PageTransition(QLayout):
         self.rail.setGeometry(queue_bounds)
         self.conversion_settings.setGeometry(old_settings_x, area.top(), settings_width, area.height())
         self.workspace.setGeometry(leading_edge, area.top(), workspace_width, area.height())
+        agent_position = self.agent_position
+        agent_edge = area.right() + 1 - round(workspace_width * position * agent_position)
+        self.agent.setGeometry(agent_edge, area.top(), workspace_width, area.height())
 
         in_preview = position > 0 and exposed == 0
         if in_preview != self.settings_in_preview:
@@ -215,7 +257,9 @@ class PageTransition(QLayout):
         self.queue.setVisible(not compact)
         self.rail.setVisible(compact)
         self.conversion_settings.setVisible(not in_preview)
-        self.workspace.setVisible(position > 0)
+        self.workspace.setVisible(position > 0 and agent_position < 1)
+        self.agent.setVisible(position > 0 and agent_position > 0)
+        self.navigation_position.emit(position * (1 + agent_position))
 
 
 class Button(QPushButton):
@@ -362,6 +406,7 @@ class DirectoryPathEdit(QLineEdit):
 
 
 QUEUED_MEDIA = "application/x-frameflow-queued-media"
+QUEUED_MEDIA_BATCH = "application/x-frameflow-queued-media-batch"
 
 
 def queued_media_key(mime_data):

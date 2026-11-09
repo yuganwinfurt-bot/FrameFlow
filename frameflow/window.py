@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -11,18 +12,19 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QEvent, QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
                            QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut)
 from PySide6.QtWidgets import (
-    QDialog, QLineEdit, QMenu,QPushButton, QScrollArea, QVBoxLayout, 
+    QDialogButtonBox, QLineEdit, QMenu, QPushButton,
     QApplication, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QScrollArea,
     QPlainTextEdit, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate,
     QVBoxLayout, QWidget,
 )
 
+from .agent_ui import AgentPage, Attachment
 from .media import (AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, LOSSLESS_AUDIO_FORMATS, VIDEO_EXTENSIONS,
                     VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS, WAVEFORM_SECONDS)
 from .media import AudioInfo, ImageInfo, VideoInfo
@@ -31,7 +33,7 @@ from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
 from .media import convert, filename_problem, media_path_missing, probe, thumbnail
 from .details import DetailsDialog
-from .motion import (QUEUED_MEDIA, Button, Combo, DirectoryButton, DropArea, Motion,
+from .motion import (QUEUED_MEDIA, QUEUED_MEDIA_BATCH, Button, Combo, DirectoryButton, DropArea, Motion,
                      NavigationBar, PageTransition, QualityRow, SpinBox, local_files)
 from .editor import Editor
 from .theme import STYLE, C, app_icon, brand_mark, chevron, shadow
@@ -506,10 +508,20 @@ class PreviewFiles(QListWidget):
         super().__init__()
         self.lookup_media = lookup_media
         self.pressed_media = None
+        self.batch_drag = False
         self.setMouseTracking(True)
         self.setItemDelegate(QueueDelegate(self))
         self.setUniformItemSizes(True)
         self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+
+    def set_batch_drag(self, enabled):
+        if self.batch_drag != enabled:
+            self.batch_drag = enabled
+            self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection if enabled
+                                  else QListWidget.SelectionMode.SingleSelection)
+            self.clearSelection()
+            if item := self.currentItem():
+                item.setSelected(True)
 
     def mousePressEvent(self, event):
         item = self.itemAt(event.position().toPoint())
@@ -530,6 +542,9 @@ class PreviewFiles(QListWidget):
                     self.pressed_media = None
                     mime = QMimeData()
                     mime.setData(QUEUED_MEDIA, key.encode("ascii"))
+                    if self.batch_drag and item.isSelected():
+                        keys = [selected.data(Qt.ItemDataRole.UserRole) for selected in self.selectedItems()]
+                        mime.setData(QUEUED_MEDIA_BATCH, json.dumps(keys).encode("ascii"))
                     drag = QDrag(self)
                     drag.setMimeData(mime)
                     drag.setPixmap(item.icon().pixmap(self.iconSize()))
@@ -544,7 +559,11 @@ class PreviewFiles(QListWidget):
             item, _ = self.pressed_media
             self.pressed_media = None
             if self.itemAt(event.position().toPoint()) is item:
-                self.setCurrentItem(item)
+                if self.batch_drag and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                    item.setSelected(not item.isSelected())
+                    self.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
+                else:
+                    self.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -699,6 +718,9 @@ class MainWindow(QMainWindow):
         self.page_host.setObjectName("pageWorkspace")
         self.page_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self._build_preview_rail()
+        self.agent_page = AgentPage(self._agent_attachment)
+        self.agent_page.attachments_requested.connect(self._choose_agent_attachments)
+        self.agent_page.clear_requested.connect(self.agent_page.clear_history)
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageWorkspace")
         self.pages.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
@@ -1016,7 +1038,7 @@ class MainWindow(QMainWindow):
         inspector.setFixedWidth(self._settings_width())
         inspector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.page_transition = PageTransition(
-            self.page_host, queue, self.preview_rail, inspector, self.pages, self._rail_width())
+            self.page_host, queue, self.preview_rail, inspector, self.pages, self._rail_width(), self.agent_page)
         self.page_transition.settings_location_changed.connect(self._move_page_settings)
         self.page_transition.settled.connect(self._settle_page)
 
@@ -1050,9 +1072,15 @@ class MainWindow(QMainWindow):
         self.page_footers = QStackedWidget()
         self.page_footers.addWidget(footer)
         self.page_footers.addWidget(self._build_preview_footer())
+        self.agent_footer = QFrame()
+        self.agent_footer.setObjectName("footer")
+        agent_footer_layout = QHBoxLayout(self.agent_footer)
+        agent_footer_layout.setContentsMargins(16, 0, 16, 0)
+        agent_footer_layout.addWidget(label("FrameFlow  ·  媒体在本地处理", muted=True))
+        self.page_footers.addWidget(self.agent_footer)
         self.page_footers.setFixedHeight(CONVERSION_FOOTER_HEIGHT)
         self.page_transition.animation.valueChanged.connect(self._resize_page_footer)
-        self.page_transition.animation.valueChanged.connect(self.navigation.set_position)
+        self.page_transition.navigation_position.connect(self.navigation.set_position)
         root.addWidget(self.page_footers)
 
     def _build_preview_footer(self):
@@ -1120,6 +1148,7 @@ class MainWindow(QMainWindow):
         self.navigation = NavigationBar()
         self.navigation.addTab("格式转换")
         self.navigation.addTab("媒体预览")
+        self.navigation.addTab("AI Agent")
         self.navigation.currentChanged.connect(self._navigate)
         row.addWidget(self.navigation)
         # 正常时不占版面，只在找不到 FFmpeg 时冒出来提醒一句
@@ -1148,7 +1177,7 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, "关于帧转 FrameFlow",
             "<b>帧转 FrameFlow</b><br>本地视频、音频、图片格式转换与轻量编辑。<br><br>"
-            "转换由 FFmpeg 命令行完成，全程不联网、不上传文件。")
+            "转换由本地 FFmpeg 完成。AI Agent 仅在配置后向指定模型发送对话及相关元数据。")
 
     def _choose_resolution(self, index):
         edge = self.resolution.itemData(index)
@@ -1279,6 +1308,7 @@ class MainWindow(QMainWindow):
         item.setIcon(QIcon(queue_thumbnail(job)))
         item.setData(QueueDelegate.META_ROLE, rail_meta(job))
         item.setToolTip(f"{job.path.name}\n{rail_meta(job)}")
+        self.agent_page.refresh_attachments()
 
     def _preview_file_changed(self, current, _previous):
         if current is None:
@@ -1286,8 +1316,33 @@ class MainWindow(QMainWindow):
         key = current.data(Qt.ItemDataRole.UserRole)
         if key in self.items:
             self.list.setCurrentItem(self.items[key])
-            if self.page_transition.target_preview:
-                self._edit_selected()
+
+    def _agent_attachment(self, key):
+        job = self.jobs.get(key)
+        if job and not media_path_missing(job.path):
+            return Attachment(key, job.path.name, rail_meta(job), queue_thumbnail(job))
+        return None
+
+    def _choose_agent_attachments(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("从媒体队列添加附件")
+        dialog.resize(500, 290)
+        layout = QVBoxLayout(dialog)
+        choices = QListWidget()
+        choices.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        for key, job in self.jobs.items():
+            item = QListWidgetItem(QIcon(queue_thumbnail(job)), job.path.name, choices)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+        layout.addWidget(choices)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("添加")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.agent_page.add_attachments(item.data(Qt.ItemDataRole.UserRole) for item in choices.selectedItems())
+        dialog.deleteLater()
 
     def _queued_media(self, key):
         job = self.jobs.get(key)
@@ -1419,10 +1474,15 @@ class MainWindow(QMainWindow):
                 row.selection_motion.move_to(amount)
         selected = self._selected()
         with QSignalBlocker(self.preview_files):
-            self.preview_files.setCurrentItem(self.preview_items.get(selected.key) if selected else None)
+            item = self.preview_items.get(selected.key) if selected else None
+            if self.preview_files.batch_drag:
+                self.preview_files.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
+            else:
+                self.preview_files.setCurrentItem(item)
+        self.agent_page.refresh_attachments()
         self._show_selected()
         self._refresh_controls()
-        if self.page_transition.target_preview:
+        if self.navigation.currentIndex() == 1:
             self._show_page(self._editor_for(selected) or self.empty_preview)
 
     def _job_extension(self, job) -> str:
@@ -1776,13 +1836,27 @@ class MainWindow(QMainWindow):
     def _navigate(self, index):
         if index == 0:
             self._show_conversion()
-        else:
+        elif index == 1:
             self._edit_selected()
+        else:
+            self._show_agent()
+
+    def _show_agent(self):
+        with QSignalBlocker(self.navigation):
+            self.navigation.setCurrentIndex(2)
+        self.preview_files.set_batch_drag(True)
+        self.agent_page.refresh_attachments()
+        self.page_footers.setCurrentWidget(self.agent_footer)
+        self._update_preview_undo()
+        self.page_transition.move_to(True, agent=True)
 
     def _restore_page_focus(self):
         if not self.isVisible() or self.isMinimized():
             return
-        target = self.preview_files if self.navigation.currentIndex() == 1 else self.list
+        index = self.navigation.currentIndex()
+        target = (self.list, self.preview_files, self.agent_page.input)[index]
+        if index == 2 and self.agent_page.isAncestorOf(self.focusWidget()):
+            return
         if target.isVisible() and target.isEnabled():
             self.activateWindow()
             target.setFocus(Qt.FocusReason.OtherFocusReason)
@@ -1814,6 +1888,8 @@ class MainWindow(QMainWindow):
             if isinstance(current := self.pages.currentWidget(), Editor):
                 current.suspend()
             self.pages.setCurrentWidget(self.conversion_page)
+        elif self.page_transition.target_agent and isinstance(current := self.pages.currentWidget(), Editor):
+            current.suspend()
         self._restore_page_focus()
 
     def _show_page(self, page):
@@ -1821,6 +1897,8 @@ class MainWindow(QMainWindow):
         current = self.pages.currentWidget()
         with QSignalBlocker(self.navigation):
             self.navigation.setCurrentIndex(int(preview))
+        returning_from_agent = self.page_transition.target_agent
+        self.preview_files.set_batch_drag(False)
         if preview and page is not current:
             if isinstance(current, Editor):
                 current.suspend()
@@ -1831,6 +1909,8 @@ class MainWindow(QMainWindow):
             if isinstance(page, Editor):
                 page.start_media()
                 page.resume()
+        elif preview and returning_from_agent and isinstance(page, Editor):
+            page.resume()
         self._sync_footer(page)
         self._update_preview_undo()
         self.page_transition.move_to(preview)
@@ -2138,6 +2218,8 @@ class MainWindow(QMainWindow):
 
     def start_export(self) -> None:
         page = self.pages.currentWidget()
+        if self.navigation.currentIndex() == 2:
+            return
         if self.navigation.currentIndex() == 1:
             if isinstance(page, Editor):
                 if page.tabs.currentWidget() is page.image_page:
@@ -2257,6 +2339,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.closing = True
         self.page_transition.animation.stop()
+        self.page_transition.agent_animation.stop()
         for editor in self.editors.values():
             editor.shutdown()
         self.editors.clear()

@@ -52,6 +52,7 @@ _SVG = {
     "check": '<circle cx="12" cy="12" r="9"/><path d="m8.4 12.2 2.4 2.5 4.8-5"/>',
     "trash": '<path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/>',
     "video": '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+    "robot": '<rect x="4" y="7" width="16" height="13" rx="3"/><path d="M12 7V3m-3 9v1m6-1v1m-5 3h4M2 11v5m20-5v5"/>',
     "image": '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="1.4"/><path d="m4 17 5-5 4 3 3-4 4 4"/>',
     "timeline": '<path d="M4 4v16h16M8 15v-4m4 4V6m4 9V9m4 6v-3"/>',
     "frames": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 5v14m8-14v14M3 10h5m8 0h5M3 14h5m8 0h5"/>',
