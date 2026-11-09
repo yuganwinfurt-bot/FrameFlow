@@ -1082,7 +1082,7 @@ class Editor(QDialog):
     directory_changed = Signal(object)
 
     def __init__(self, path, info, tools, directory=None, parent=None, *, embedded=False,
-                 lookup_media=None, report_missing=None, defer_media=False):
+                 lookup_media=None, report_missing=None, defer_media=False, get_output_stem=lambda: ""):
         super().__init__(parent)
         self.embedded = embedded
         self.media_started = False
@@ -1091,6 +1091,7 @@ class Editor(QDialog):
         if embedded:
             self.setWindowFlags(Qt.WindowType.Widget)
         self.path, self.info, self.tools = path, info, tools
+        self._get_output_stem = get_output_stem
         self.media_format = "mp4" if isinstance(info, VideoInfo) else "mp3"
         self.audio_tab_format = "mp3"
         self.selected_acceleration = "cpu"
@@ -2494,6 +2495,9 @@ class Editor(QDialog):
             stem = f"{self.path.stem}_图片"
         else:
             stem = f"{self.path.stem}_编辑"
+        stem = self._get_output_stem() or stem
+        if hasattr(self, "output_stem_ext"):
+            self.output_stem_ext.setText(f".{extension}")
         name = f"{stem}.{extension}"
         self.output_file_name.setText(name)
 
@@ -2724,7 +2728,8 @@ class Editor(QDialog):
         if isinstance(self.info, ImageInfo):
             quality, limit, compression = self._picture_encoding()
             return Export(self.image_format.currentData(), self.directory, max_edge=int(self.resolution.currentData() or 0),
-                          target_bytes=limit, quality=quality, png_compression=compression)
+                          target_bytes=limit, quality=quality, png_compression=compression,
+                          output_stem=self._get_output_stem())
         return Export(self.format.currentData(), self.directory,
                       small_gif=bool(self.gif_profile.currentData()),
                       max_edge=max(0, int(self.export_edge.currentData() or 0)),
@@ -2733,7 +2738,8 @@ class Editor(QDialog):
                       output_fps=int(self.output_fps.currentData() or 0), quality=self.quality.value(),
                       audio_bitrate=int(self.audio_bitrate.currentData() or 0),
                       audio_sample_rate=int(self.audio_sample_rate.currentData() or 0),
-                      audio_channels=int(self.audio_channels.currentData() or 0))
+                      audio_channels=int(self.audio_channels.currentData() or 0),
+                      output_stem=self._get_output_stem())
 
     def apply_output_options(self, options):
         with QSignalBlocker(self):
@@ -4316,10 +4322,11 @@ class Editor(QDialog):
         kind = self.image_format.currentData()
         quality, limit, png_compression = self._picture_encoding()
         directory, max_edge = self.directory, self.resolution.currentData()
+        output_stem = self._get_output_stem()
         def save(scope):
             return save_picture(self.path, video, index, kind, quality, limit, directory,
                                 self.tools, scope, max_edge=max_edge, frame_path=path,
-                                png_compression=png_compression)
+                                png_compression=png_compression, output_stem=output_stem)
         message = f"正在保存第 {frame} 帧…" if frame is not None else "正在保存图片…"
         self._run(message, save, lambda path: self._saved(path, limit, frame=frame), exporting=True)
 

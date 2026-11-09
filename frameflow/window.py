@@ -29,7 +29,7 @@ from .media import AudioInfo, ImageInfo, VideoInfo
 from .icons import INK, icon as line_icon, pixmap as line_pixmap
 from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
-from .media import convert, media_path_missing, probe, thumbnail
+from .media import convert, filename_problem, media_path_missing, probe, thumbnail
 from .details import DetailsDialog
 from .motion import (QUEUED_MEDIA, Button, Combo, DirectoryButton, DropArea, Motion,
                      NavigationBar, PageTransition, QualityRow, SpinBox, local_files)
@@ -606,27 +606,11 @@ class BatchFormatMenu(QFrame):
         self.close()
 
 
-BAD_NAME_CHARS = set('<>:"/\\|?*')
-RESERVED_NAMES = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {
-    f"lpt{i}" for i in range(1, 10)}
-
-
 def validate_filename(stem: str, source) -> str:
     """返回错误提示，空串表示可用。"""
-    name = stem.strip()
-    if not name:
-        return "文件名不能为空"
-    if name in {".", ".."}:
-        return "文件名不能是 . 或 .."
-    if any(ch in BAD_NAME_CHARS for ch in name):
-        return "文件名不能包含 < > : \" / \\ | ? * 这些字符"
-    if name != stem:
-        return "文件名首尾不能是空格"
-    if name.endswith("."):
-        return "文件名不能以句点结尾"
-    if name.split(".")[0].lower() in RESERVED_NAMES:
-        return "该名称是 Windows 保留名称，请换一个"
-    target = source.with_name(name + source.suffix)
+    if problem := filename_problem(stem):
+        return problem
+    target = source.with_name(stem + source.suffix)
     if target.exists():
         return "该文件夹已存在同名文件，请使用其他名称。"
     return ""
@@ -1200,13 +1184,7 @@ class MainWindow(QMainWindow):
         self._apply_batch_format(key)
 
     def _apply_batch_format(self, index):
-        if isinstance(index, str):
-            key = index
-        else:
-            key = self.batch_format.itemData(index)
-            if key is None:
-                return
-        kind = self.batch_format.itemData(index)
+        kind = index if isinstance(index, str) else self.batch_format.itemData(index)
         if self.scope is not None or not kind:
             return
         applied = 0
@@ -1457,20 +1435,29 @@ class MainWindow(QMainWindow):
                 "ico": "ico", "pdf": "pdf"}.get(kind, kind or "mp4")
 
     def _output_stem_edited(self, text: str) -> None:
-        job = self._selected()
-        if job is None:
-            return
-        job.output_stem = text.strip()
-        self._refresh_output_name_preview(job)
+        if job := self._selected():
+            self._set_output_stem(job, text)
+
+    def _set_output_stem(self, job, text: str) -> None:
+        job.output_stem = text
+        if editor := self.editors.get(job.key):
+            if editor.output_stem_edit.text() != text:
+                editor.output_stem_edit.setText(text)
+            editor._update_output_location()
+        if self._selected() is job:
+            if self.output_stem_edit.text() != text:
+                self.output_stem_edit.setText(text)
+            self._refresh_output_name_preview(job)
 
     def _refresh_output_name_preview(self, job) -> None:
         ext = self._job_extension(job)
         self.output_stem_ext.setText(f".{ext}")
         stem = job.output_stem or job.path.stem
         directory = self.output_directory or job.path.parent
-        target = directory / f"{stem}.{ext}"
+        name = f"{stem}.{ext}"
+        target = directory / name
         self.output_stem_edit.setToolTip(str(target))
-        self.output_name.set_full_text(target.name)
+        self.output_name.set_full_text(name)
         self.output_name.setToolTip(str(target))
 
     def _show_selected(self) -> None:
@@ -1480,10 +1467,7 @@ class MainWindow(QMainWindow):
         if job and job.output:
             output_name = job.output.name
         elif job and job.output_format:
-            extension = {"mkv_hevc": "mkv", "gif_image": "gif"}.get(
-                job.output_format, job.output_format
-            )
-            output_name = f"{job.path.stem}.{extension}"
+            output_name = f"{job.output_stem or job.path.stem}.{self._job_extension(job)}"
         else:
             output_name = "选择文件并设置格式后显示输出文件名"
         self.output_stem_edit.blockSignals(True)
@@ -1693,7 +1677,8 @@ class MainWindow(QMainWindow):
             return editor
         editor = Editor(job.path, job.info, self.tools, self.output_directory, self.pages,
                         embedded=True, lookup_media=self._queued_media,
-                        report_missing=self._report_missing_media, defer_media=True)
+                        report_missing=self._report_missing_media, defer_media=True,
+                        get_output_stem=lambda: job.output_stem)
         editor.set_output_format(job.output_format)
         if job.output_format:
             editor.apply_output_options(self._job_export(job))
@@ -1704,6 +1689,7 @@ class MainWindow(QMainWindow):
         editor.task_changed.connect(lambda: self._refresh_preview_footer(editor))
         editor.settings_changed.connect(lambda: self._store_editor_settings(job, editor))
         editor.directory_changed.connect(lambda directory: self._store_directory(job, directory))
+        self._attach_output_stem(editor, job)
         self.editors[job.key] = editor
         self.pages.addWidget(editor)
         return editor
@@ -1720,55 +1706,29 @@ class MainWindow(QMainWindow):
                 # 以编辑器当前值为准，避免切页时把用户刚调好的质量打回默认
                 self.quality.setValue(editor.quality.value())
             editor.settings_body.setEnabled(self.scope is None and job.queued)
-            self._attach_output_stem(editor, job)
             self.mounted_editor = editor
 
     def _attach_output_stem(self, editor, job) -> None:
-        """把「输出文件名」行挂到编辑器的保存目录卡片下方（只建一次）。"""
-        card = getattr(editor, "directory_path", None)
-        if card is None:
-            return
-        group = None
-        node = card.parentWidget()
-        while node is not None:
-            if isinstance(node.layout(), QVBoxLayout):
-                group = node
-                break
-            node = node.parentWidget()
-        if group is None:
-            return
-        if not hasattr(editor, "output_stem_edit"):
-            from PySide6.QtWidgets import QLabel as _QLabel, QLineEdit as _QLineEdit
-            hint = _QLabel("输出文件名")
-            hint.setObjectName("paramLabel")
-            group.layout().addWidget(hint)
-            line = QWidget()
-            line_layout = QHBoxLayout(line)
-            line_layout.setContentsMargins(0, 0, 0, 0)
-            line_layout.setSpacing(6)
-            editor.output_stem_edit = _QLineEdit()
-            editor.output_stem_edit.setPlaceholderText("输出文件名")
-            editor.output_stem_edit.setMinimumHeight(30)
-            line_layout.addWidget(editor.output_stem_edit, 1)
-            editor.output_stem_ext = _QLabel("")
-            editor.output_stem_ext.setMinimumWidth(46)
-            line_layout.addWidget(editor.output_stem_ext)
-            group.layout().addWidget(line)
-            editor.output_stem_edit.textEdited.connect(
-                lambda text: self._stem_edited_for(editor, text))
-        editor.output_stem_edit.blockSignals(True)
+        """在编辑器创建时把「输出文件名」挂到共享的保存目录卡片。"""
+        layout = editor.directory_group.layout()
+        hint = QLabel("输出文件名")
+        hint.setObjectName("paramLabel")
+        layout.addWidget(hint)
+        line = QWidget()
+        line_layout = QHBoxLayout(line)
+        line_layout.setContentsMargins(0, 0, 0, 0)
+        line_layout.setSpacing(6)
+        editor.output_stem_edit = QLineEdit()
+        editor.output_stem_edit.setPlaceholderText("输出文件名")
+        editor.output_stem_edit.setMinimumHeight(30)
         editor.output_stem_edit.setText(job.output_stem or job.path.stem)
-        editor.output_stem_edit.blockSignals(False)
-        editor.output_stem_ext.setText(f".{self._job_extension(job)}" if job.output_format else "")
-
-    def _stem_edited_for(self, editor, text: str) -> None:
-        job = self._selected()
-        if job is None:
-            return
-        job.output_stem = text.strip()
-        if hasattr(editor, "output_stem_ext"):
-            editor.output_stem_ext.setText(f".{self._job_extension(job)}")
-        self._refresh_output_name_preview(job)
+        editor.output_stem_edit.textEdited.connect(lambda text: self._set_output_stem(job, text))
+        line_layout.addWidget(editor.output_stem_edit, 1)
+        editor.output_stem_ext = QLabel("")
+        editor.output_stem_ext.setMinimumWidth(46)
+        line_layout.addWidget(editor.output_stem_ext)
+        layout.addWidget(line)
+        editor._update_output_location()
 
     def _quality_changed(self, value: int) -> None:
         """转换页的滑块与预览页的滑块共用一份质量参数。"""
@@ -2039,21 +1999,6 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self.status.setText(f"已重命名为 {target.name}")
 
-    def _apply_output_stem(self, job, path):
-        stem = (job.output_stem or "").strip()
-        if not stem or stem == job.path.stem:
-            return path
-        target = path.with_name(f"{stem}{path.suffix}")
-        index = 1
-        while target.exists():
-            target = path.with_name(f"{stem} ({index}){path.suffix}")
-            index += 1
-        try:
-            path.rename(target)
-            return target
-        except OSError:
-            return path
-
     def _remove_job(self, key: str) -> None:
         if self.scope is not None or key not in self.jobs:
             return
@@ -2161,7 +2106,8 @@ class MainWindow(QMainWindow):
                       audio_bitrate=192, png_compression=7 if isinstance(job.info, ImageInfo) else 6)
 
     def _job_export(self, job):
-        return replace(job.export_settings, format=job.output_format) if job.export_settings else self._batch_options(job)
+        options = job.export_settings or self._batch_options(job)
+        return replace(options, format=job.output_format, output_stem=job.output_stem)
 
     def _show_batch_settings(self):
         before = (self.resolution.currentData(), self.output_fps.currentData(), self.acceleration.currentData(),
@@ -2194,7 +2140,10 @@ class MainWindow(QMainWindow):
         page = self.pages.currentWidget()
         if self.navigation.currentIndex() == 1:
             if isinstance(page, Editor):
-                page.save_edit()
+                if page.tabs.currentWidget() is page.image_page:
+                    page.save_image()
+                else:
+                    page.save_edit()
             return
         if self.scope is not None or self.tools is None or any(
             job.queued and job.state == "读取中" for job in self.jobs.values()

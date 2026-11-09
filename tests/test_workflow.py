@@ -19,14 +19,14 @@ from PIL import Image
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QMouseEvent, QWheelEvent
+from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QInputMethodEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QScrollArea, QWidget
 
 from frameflow.media import AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, Tools
 from frameflow.media import (convert, hardware_acceleration_choices, probe, thumbnail,
                              video_encoder_args)
-from frameflow.window import MainWindow
+from frameflow.window import BatchFormatMenu, MainWindow
 from frameflow.editor import Editor
 from frameflow.editing import Clip, audio_preview, index_frames, length, render_edit
 from frameflow.motion import Combo, QUEUED_MEDIA
@@ -329,6 +329,165 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(window.preview_files.count(), 0)
         self.assertFalse(window.jobs)
         self.assertTrue(all(path.is_file() for path in (*outputs, self.source, second)))
+
+    def open_export_window(self, *paths):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1260, 760)
+        window.show()
+        window.add_paths(paths)
+        self.wait_for(lambda: all(job.info for job in window.jobs.values()), "导入真实素材")
+        return window
+
+    def enter_output_name(self, editor, name):
+        field = editor.output_stem_edit
+        parent = field.parentWidget()
+        while parent is not None and not isinstance(parent, QScrollArea):
+            parent = parent.parentWidget()
+        if parent is not None:
+            parent.ensureWidgetVisible(field)
+        QTest.mouseClick(field, Qt.MouseButton.LeftButton)
+        QTest.keyClick(field, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        event = QInputMethodEvent()
+        event.setCommitString(name)
+        QApplication.sendEvent(field, event)
+        self.assertEqual(field.text(), name)
+
+    def test_batch_format_menu_exports_only_compatible_rows(self):
+        second = self.root / "第二条.mov"
+        second.write_bytes(self.source.read_bytes())
+        audio = self.root / "音频.wav"
+        Processes().run([self.tools.ffmpeg, "-v", "error", "-i", str(self.source),
+                         "-vn", "-c:a", "pcm_s16le", str(audio)], timeout=20)
+        image = self.root / "图片.png"
+        Image.new("RGB", (40, 30), "blue").save(image)
+        window = self.open_export_window(self.source, second, audio, image)
+        jobs = list(window.jobs.values())
+        previous = [job.output_format for job in jobs]
+        self.assertEqual(previous[:2], ["mp4", "mp4"])
+        QTest.mouseClick(window.batch_button, Qt.MouseButton.LeftButton)
+        menu = window.findChild(BatchFormatMenu)
+        self.assertIsNotNone(menu)
+        self.assertTrue(menu.isVisible())
+        choice = next(button for button in menu.findChildren(QPushButton)
+                      if button.property("formatKey") == "mkv")
+        menu.findChild(QScrollArea).ensureWidgetVisible(choice)
+        QTest.mouseClick(choice, Qt.MouseButton.LeftButton)
+        expected = ["mkv", "mkv", *previous[2:]]
+        self.assertEqual([job.output_format for job in jobs], expected)
+        self.assertEqual([window.rows[job.key].format.currentData() for job in jobs], expected)
+
+        QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(window.scope)
+        self.wait_for(lambda: window.scope is None, "混合队列转换完成")
+        for job, extension in zip(jobs, expected):
+            self.assertEqual(job.state, "已完成", job.detail)
+            self.assertEqual(job.output.suffix, f".{extension}")
+            self.decode(job.output)
+        for job in jobs[:2]:
+            result = probe(job.output, self.tools, Processes())
+            self.assertIn("matroska", result.container.split(","))
+            self.assertEqual(result.codec, "H264")
+
+    def test_conversion_uses_custom_filename_and_rejects_invalid_name(self):
+        original = self.source.read_bytes()
+        window = self.open_export_window(self.source)
+        job = window._selected()
+        editor = window.mounted_editor
+        destination = self.root / "转换输出"
+        destination.mkdir()
+        with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(destination)):
+            editor.choose_directory()
+
+        self.enter_output_name(editor, "坏/名称")
+        QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(window.scope)
+        self.wait_for(lambda: window.scope is None, "非法名称校验完成")
+        self.assertIn("文件名不能包含", job.detail)
+        self.assertIsNone(job.output)
+        self.assertEqual(list(destination.iterdir()), [])
+
+        name = "转换 Export (校对)"
+        occupied = destination / f"{name}.mp4"
+        occupied.write_bytes(b"existing")
+        self.enter_output_name(editor, name)
+        QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(window.scope)
+        self.wait_for(lambda: window.scope is None, "自定义名称转换完成")
+        expected = destination / f"{name} (1).mp4"
+        self.assertEqual(job.output, expected, job.detail)
+        self.assertEqual(probe(expected, self.tools, Processes()).codec, "H264")
+        self.decode(expected)
+        self.assertEqual(occupied.read_bytes(), b"existing")
+        self.assertEqual(self.source.read_bytes(), original)
+        self.assertEqual(set(destination.iterdir()), {occupied, expected})
+
+    def test_media_preview_uses_custom_filename_after_switching_pages(self):
+        window = self.open_export_window(self.source)
+        job = window._selected()
+        editor = window.mounted_editor
+        names = []
+        editor.saved.connect(names.append)
+        QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                         pos=window.navigation.tabRect(1).center())
+        self.wait_for(lambda: not window.page_transition.running, "进入媒体预览")
+        self.enter_output_name(editor, "剪辑 Preview (最终)")
+        for index in (0, 1):
+            QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                             pos=window.navigation.tabRect(index).center())
+            QTest.qWait(25)
+        self.wait_for(lambda: not window.page_transition.running and editor.frames and editor.scope is None,
+                      "预览转场和视频读取完成")
+        self.assertIs(window._selected(), job)
+        self.assertIs(window.pages.currentWidget(), editor)
+        self.assertEqual(editor.output_stem_edit.text(), "剪辑 Preview (最终)")
+        destination = self.root / "编辑输出"
+        destination.mkdir()
+        with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(destination)):
+            editor.choose_directory()
+        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(editor.scope)
+        self.wait_for(lambda: editor.scope is None, "媒体预览导出完成")
+        expected = destination / "剪辑 Preview (最终).mp4"
+        self.assertEqual(names, [expected], editor.notice.text())
+        self.assertEqual(probe(expected, self.tools, Processes()).codec, "H264")
+        self.decode(expected)
+
+        self.enter_output_name(editor, "CON")
+        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(editor.scope)
+        self.wait_for(lambda: editor.scope is None, "媒体预览非法名称校验")
+        self.assertIn("Windows 保留名称", editor.notice.text())
+        self.assertEqual(list(destination.iterdir()), [expected])
+
+    def test_media_preview_image_export_uses_custom_name_and_protects_source(self):
+        image = self.root / "截图 Image (原始).png"
+        Image.new("RGB", (40, 30), "blue").save(image)
+        original = image.read_bytes()
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1260, 760)
+        window.show()
+        QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                         pos=window.navigation.tabRect(1).center())
+        window.add_paths([image])
+        self.wait_for(lambda: isinstance(window.pages.currentWidget(), Editor)
+                      and not window.page_transition.running, "在预览页导入图片")
+        editor = window.pages.currentWidget()
+        self.enter_output_name(editor, image.stem)
+        self.assertEqual(window._selected().output_stem, image.stem)
+        names = []
+        editor.saved.connect(names.append)
+        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        self.assertIsNotNone(editor.scope)
+        self.wait_for(lambda: editor.scope is None, "预览图片导出完成")
+        expected = image.with_stem(f"{image.stem} (1)")
+        self.assertEqual(names, [expected], editor.notice.text())
+        self.assertEqual(image.read_bytes(), original)
+        codec = Processes().run([self.tools.ffprobe, "-v", "error", "-select_streams", "v:0",
+                                 "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(expected)],
+                                timeout=20)
+        self.assertEqual(codec.strip(), b"png")
 
     def test_video_editor_frame_cut_paste_save_and_queue(self):
         window = MainWindow(self.tools)
@@ -1897,6 +2056,90 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(table.verticalScrollBar().value(), 130)
         self.assertEqual(table.currentItem().data(Qt.ItemDataRole.UserRole), before)
         self.assertTrue(window.batch_button.isVisible())
+
+    def test_page_transition_geometry_at_quarter_progress(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.show()
+        window.add_paths([self.source])
+        self.wait_for(lambda: window.mounted_editor is not None, "素材可预览")
+        editor = window.mounted_editor
+        host = window.page_host
+        transition = window.page_transition
+        animation = transition.animation
+        easing = animation.easingCurve()
+        levels = (0, .25, .50, .75, 1)
+        times = {level: min(range(animation.duration() + 1),
+                            key=lambda ms: abs(easing.valueForProgress(ms / animation.duration()) - level))
+                 for level in levels}
+
+        def click(index):
+            QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                             pos=window.navigation.tabRect(index).center())
+
+        def sample(level):
+            animation.setCurrentTime(times[level])
+            self.app.processEvents()
+            self.assertAlmostEqual(transition.position, level, delta=.01)
+            self.assertIs(window.pages.parentWidget(), host)
+            self.assertIs(editor.parentWidget(), window.pages)
+            queue = window.queue_card if window.preview_rail.isHidden() else window.preview_rail
+            self.assertLess(queue.geometry().right(), window.pages.x())
+            self.assertEqual(window.pages.isHidden(), level == 0)
+            if level > 0:
+                self.assertIs(window.pages.currentWidget(), editor)
+                center = editor.workspace_split.widget(0).mapTo(host, QPoint()).x()
+                settings = editor.inspector.mapTo(host, QPoint()).x()
+            else:
+                center = settings = None
+            return queue.width(), window.pages.x(), center, settings
+
+        click(1)
+        animation.pause()
+        forward = [sample(level) for level in levels]
+        animation.resume()
+        self.wait_for(lambda: not transition.running, "预览端点")
+        self.assertIs(editor.settings_scroll.widget(), editor.settings_body)
+        click(0)
+        animation.pause()
+        backward = [sample(level) for level in reversed(levels)]
+        animation.resume()
+        self.wait_for(lambda: not transition.running, "转换端点")
+        self.assertEqual(forward, list(reversed(backward)))
+        self.assertTrue(all(a[0] > b[0] and a[1] > b[1] for a, b in zip(forward, forward[1:])))
+        self.assertEqual(len({settings - center for _, _, center, settings in forward[1:]}), 1)
+        self.assertIs(window.mounted_editor, editor)
+        print(f"\n转场几何 DPR={window.devicePixelRatio():.2f}，四元组为队列宽、工作区 X、播放器栏 X、右栏 X")
+        for level, geometry in zip(levels, forward):
+            print(f"  {level:.0%} {geometry}")
+
+    def test_page_transition_twenty_clicks_keep_queue_and_editor(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.show()
+        second = self.root / "第二条 素材.mov"
+        second.write_bytes(self.source.read_bytes())
+        window.add_paths([self.source, second])
+        self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "两条素材就绪")
+        window.list.setCurrentRow(1)
+        selected = window._selected()
+        editor = window.mounted_editor
+        pages = window.pages.count()
+        transitions = []
+        window.navigation.currentChanged.connect(transitions.append)
+        for index in (1, 0) * 10:
+            QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                             pos=window.navigation.tabRect(index).center())
+            QTest.qWait(25)
+            self.assertIs(window._selected(), selected)
+        self.wait_for(lambda: not window.page_transition.running, "快切后停在格式转换")
+        self.assertEqual(transitions, [1, 0] * 10)
+        self.assertEqual(window.pages.count(), pages)
+        self.assertIs(window.mounted_editor, editor)
+        self.assertIs(window.pages.currentWidget(), window.conversion_page)
+        self.assertEqual(window.preview_files.currentRow(), 1)
+        self.assertTrue(window.pages.isHidden())
+        self.assertTrue(window.preview_rail.isHidden())
 
     def test_page_transition_keeps_playback_and_edit_state_through_reversal(self):
         window = MainWindow(self.tools)

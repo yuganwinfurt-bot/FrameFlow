@@ -12,7 +12,7 @@ from pathlib import Path
 from .media import (HARDWARE_BACKENDS, AudioInfo, Cancelled, Export, ImageInfo, MediaError,
                     Processes, Tools, VideoInfo, audio_encoder_args, video_encoder_args)
 from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _publish, _save_image_to_limit,
-                    _with_bitrates, convert, probe)
+                    _with_bitrates, convert, probe, resolve_output_stem)
 
 
 @dataclass(frozen=True)
@@ -293,10 +293,11 @@ def render_edit(source, video, audio, fps, options: Export, tools: Tools, scope:
         raise MediaError("请选择视频格式。")
     if not video and (not audio or kind not in _AUDIO_ENCODERS):
         raise MediaError("需要至少一段音频和一种音频格式。")
+    stem = target.stem if target is not None else resolve_output_stem(options.output_stem, f"{source.stem}_编辑")
     directory = target.parent if target is not None else options.directory or source.parent
+    extension = "mkv" if kind == "mkv_hevc" else kind
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".frameflow-edit-", dir=directory) as folder:
-        extension = "mkv" if kind == "mkv_hevc" else kind
         temp = Path(folder) / ("edit.mkv" if kind == "gif" else f"edit.{extension}")
         output_fps = options.output_fps if video and kind != "gif" else 0
         inputs, graph = _graph(video, audio, fps, canvas=canvas, max_edge=options.max_edge,
@@ -361,21 +362,26 @@ def render_edit(source, video, audio, fps, options: Export, tools: Tools, scope:
         scope.check()
         if kind == "gif":
             info = probe(temp, tools, scope)
-            gif = convert(temp, info, replace(options, directory=Path(folder)), tools, scope,
+            gif = convert(temp, info, replace(options, directory=Path(folder), output_stem=""), tools, scope,
                           lambda value: progress(60 + value * 39 // 100))
             temp = gif
         if not temp.is_file() or not temp.stat().st_size:
             raise MediaError("没有生成有效成品。")
+        scope.check()
         if target is not None:
-            scope.check()
-            return _publish(temp, directory, target.stem, target.suffix[1:])
-        return _publish(temp, directory, f"{source.stem}_编辑", extension)
+            extension = target.suffix[1:]
+        return _publish(temp, directory, stem, extension)
 
 
 def save_picture(source, video_info, index, kind, quality, limit, directory, tools, scope, *, max_edge=0,
-                 target: Path | None = None, frame_path: Path | None = None, png_compression=6):
+                 target: Path | None = None, frame_path: Path | None = None, png_compression=6,
+                 output_stem: str = ""):
     if target is not None:
         directory = target.parent
+        stem = target.stem
+    else:
+        default = f"{source.stem}_帧{index + 1:06}" if video_info is not None else f"{source.stem}_图片"
+        stem = resolve_output_stem(output_stem, default)
     directory.mkdir(parents=True, exist_ok=True)
     extension = "gif" if kind == "gif_image" else kind
     with tempfile.TemporaryDirectory(prefix=".frameflow-frame-", dir=directory) as folder:
@@ -389,6 +395,5 @@ def save_picture(source, video_info, index, kind, quality, limit, directory, too
                              quality=quality, max_edge=max_edge, limit=limit, png_compression=png_compression)
         scope.check()
         if target is not None:
-            return _publish(best, directory, target.stem, target.suffix[1:])
-        stem = f"{source.stem}_帧{index + 1:06}" if video_info is not None else f"{source.stem}_图片"
+            extension = target.suffix[1:]
         return _publish(best, directory, stem, extension)

@@ -32,6 +32,9 @@ AUDIO_EXTENSIONS = {".mp3", ".m4a", ".m4b", ".wav", ".flac", ".aac", ".opus", ".
                     ".oga", ".wma", ".aif", ".aiff", ".ape", ".amr", ".mka", ".caf"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".tif", ".tiff", ".bmp", ".gif", ".ico"}
 LOSSLESS_AUDIO_FORMATS = {"wav", "flac"}
+BAD_NAME_CHARS = set('<>:"/\\|?*')
+RESERVED_NAMES = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {
+    f"lpt{i}" for i in range(1, 10)}
 
 
 class MediaError(RuntimeError):
@@ -49,6 +52,31 @@ def media_path_missing(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def filename_problem(stem: str) -> str:
+    name = stem.strip()
+    if not name:
+        return "文件名不能为空"
+    if name in {".", ".."}:
+        return "文件名不能是 . 或 .."
+    if any(ch in BAD_NAME_CHARS or ord(ch) < 32 for ch in name):
+        return "文件名不能包含 < > : \" / \\ | ? * 或控制字符"
+    if name != stem:
+        return "文件名首尾不能是空格"
+    if name.endswith("."):
+        return "文件名不能以句点结尾"
+    if name.split(".")[0].lower() in RESERVED_NAMES:
+        return "该名称是 Windows 保留名称，请换一个"
+    return ""
+
+
+def resolve_output_stem(custom: str, default: str) -> str:
+    if not custom:
+        return default
+    if problem := filename_problem(custom):
+        raise MediaError(problem)
+    return custom
 
 
 @dataclass(frozen=True)
@@ -130,6 +158,7 @@ class Export:
     audio_sample_rate: int = 0
     audio_channels: int = 0
     png_compression: int = 6
+    output_stem: str = ""
 
     @property
     def size_limit(self) -> int:
@@ -654,6 +683,7 @@ def convert(
             raise MediaError("请选择支持的音频输出格式。")
     elif kind not in (*_ENCODERS, *_AUDIO_ENCODERS, "gif"):
         raise MediaError("请选择支持的视频输出格式。")
+    stem = resolve_output_stem(options.output_stem, source.stem)
     directory = options.directory or source.parent
     scope.check()
     directory.mkdir(parents=True, exist_ok=True)
@@ -776,4 +806,4 @@ def convert(
         scope.check()
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise MediaError("转换没有生成有效的输出文件。")
-        return _publish(temporary, directory, source.stem, extension)
+        return _publish(temporary, directory, stem, extension)
