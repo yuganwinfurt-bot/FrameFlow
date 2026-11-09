@@ -11,10 +11,10 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QEvent, QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
-                           QKeySequence, QPainter, QPen, QPixmap, QShortcut)
+                           QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut)
 from PySide6.QtWidgets import (
     QDialog, QLineEdit, QMenu,QPushButton, QScrollArea, QVBoxLayout, 
     QApplication, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
@@ -38,11 +38,11 @@ from .theme import STYLE, C, app_icon, brand_mark, chevron, shadow
 
 # 队列行的列宽。表头和行共用这几个数，改一处两边一起对齐。
 THUMB_SIZE = QSize(56, 36)
-RAIL_THUMB_SIZE = QSize(64, 46)
 W_DURATION, W_SIZE, W_FORMAT, W_STATE, W_REMOVE = 66, 72, 132, 78, 28
 ROW_HEIGHT = 58
 ROW_SPACING = 8
 ROW_MARGINS = (10, 6, 8, 6)
+QUEUE_COLUMN_HEIGHT = 26
 RAIL_MIN_WIDTH = 232
 CONVERSION_FOOTER_HEIGHT = 65
 PREVIEW_FOOTER_HEIGHT = 56
@@ -314,6 +314,45 @@ def fit_pixmap(source: QPixmap, size: QSize, mode: Qt.AspectRatioMode = Qt.Aspec
     return scaled
 
 
+def queue_thumbnail(job):
+    thumbnail = QPixmap(THUMB_SIZE)
+    thumbnail.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(thumbnail)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    shape = QPainterPath()
+    shape.addRoundedRect(QRectF(thumbnail.rect()), 4, 4)
+    painter.fillPath(shape, C.sunken)
+    painter.setClipPath(shape)
+    if job.picture is not None:
+        image = fit_pixmap(job.picture, THUMB_SIZE)
+        painter.drawPixmap((thumbnail.width() - image.width()) // 2,
+                           (thumbnail.height() - image.height()) // 2, image)
+    else:
+        mark = {VideoInfo: "视频", AudioInfo: "音频", ImageInfo: "图片"}.get(type(job.info), "媒体")
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(C.text3)
+        painter.drawText(thumbnail.rect(), Qt.AlignmentFlag.AlignCenter, mark)
+    painter.end()
+    return thumbnail
+
+
+def paint_queue_highlight(painter, rect, selection, hovered):
+    if selection <= .004 and not hovered:
+        return
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(C.accent_soft if selection > .004 else C.sunken)
+    painter.setOpacity(selection if selection > .004 else 1.0)
+    painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 6, 6)
+    if selection > .004:
+        painter.setBrush(C.accent)
+        painter.drawRoundedRect(QRectF(rect.left() + 2, rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
+    painter.restore()
+
+
 class Row(QWidget):
     remove_requested = Signal(str)
     format_changed = Signal(str, str)
@@ -405,26 +444,12 @@ class Row(QWidget):
             self.length_label.setText("—")
             self.size_label.setText("—")
         self.name.setToolTip(job.path.name)
-        if job.picture is not None:
-            self.thumb.setPixmap(fit_pixmap(job.picture, self.thumb.size()))
-        elif job.info:
-            self.thumb.setText({AudioInfo: "音频", ImageInfo: "图片", VideoInfo: "视频"}[type(job.info)])
+        self.thumb.setPixmap(queue_thumbnail(job))
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         painter = QPainter(self)
-        rect = QRectF(self.rect())
-        if self.selection_motion.value > 0.004:
-            painter.fillRect(rect, C.surface)
-            painter.setOpacity(self.selection_motion.value)
-            painter.fillRect(rect, C.accent_soft)
-            painter.setOpacity(1.0)
-            painter.fillRect(QRectF(rect.left(), rect.top() + 8, 3, rect.height() - 16), C.accent)
-        elif self.hovered:
-            painter.fillRect(rect, C.sunken)
-        painter.setPen(QPen(C.divider, 1))
-        painter.drawLine(QPointF(rect.left() + ROW_MARGINS[0], rect.bottom() + .5),
-                         QPointF(rect.right() - ROW_MARGINS[2], rect.bottom() + .5))
+        paint_queue_highlight(painter, QRectF(self.rect()), self.selection_motion.value, self.hovered)
         painter.end()
 
 
@@ -434,54 +459,39 @@ class QueueDelegate(QStyledItemDelegate):
     META_ROLE = Qt.ItemDataRole.UserRole + 1
 
     def sizeHint(self, option, index):
-        return QSize(0, 66)
+        return QSize(0, ROW_HEIGHT)
 
     def paint(self, painter, option, index):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = QRectF(option.rect).adjusted(1, 3, -1, -3)
+        rect = QRectF(option.rect)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        if selected:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(C.accent_soft)
-            painter.drawRoundedRect(rect, 8, 8)
-            painter.setBrush(C.accent)
-            painter.drawRoundedRect(QRectF(rect.left(), rect.top() + 8, 3, rect.height() - 16), 1.5, 1.5)
-        elif hovered:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(C.sunken)
-            painter.drawRoundedRect(rect, 7, 7)
+        paint_queue_highlight(painter, rect, float(selected), hovered)
 
         icon = index.data(Qt.ItemDataRole.DecorationRole)
-        thumb = QRectF(rect.left() + 8, rect.center().y() - RAIL_THUMB_SIZE.height() / 2,
-                       RAIL_THUMB_SIZE.width(), RAIL_THUMB_SIZE.height())
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(C.track)
-        painter.drawRoundedRect(thumb, 4, 4)
+        left, top, right, bottom = ROW_MARGINS
+        thumb = QRectF(rect.left() + left, rect.center().y() - THUMB_SIZE.height() / 2,
+                       THUMB_SIZE.width(), THUMB_SIZE.height())
         if isinstance(icon, QIcon):
-            pixmap = icon.pixmap(RAIL_THUMB_SIZE)
-            if not pixmap.isNull():
-                painter.setClipRect(thumb)
-                painter.drawPixmap(thumb.topLeft(), pixmap)
-                painter.setClipping(False)
+            pixmap = icon.pixmap(THUMB_SIZE)
+            painter.drawPixmap(thumb, pixmap, QRectF(pixmap.rect()))
 
-        text_left = thumb.right() + 10
-        width = max(20.0, rect.right() - text_left - 6)
+        text_left = thumb.right() + ROW_SPACING
+        width = max(0.0, rect.right() - text_left - right)
         font = QFont(option.font)
         font.setPixelSize(13)
         bold = QFont(font)
-        bold.setPixelSize(14)
         bold.setWeight(QFont.Weight.DemiBold)
         painter.setFont(bold)
         painter.setPen(C.text)
         name = font_metrics_elide(painter, index.data(Qt.ItemDataRole.DisplayRole) or "", width)
-        painter.drawText(QRectF(text_left, rect.center().y() - 17, width, 17),
+        painter.drawText(QRectF(text_left, rect.top() + top, width, rect.height() / 2 - top),
                          int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), name)
         painter.setFont(font)
         painter.setPen(C.text2)
         meta = font_metrics_elide(painter, index.data(self.META_ROLE) or "", width)
-        painter.drawText(QRectF(text_left, rect.center().y() + 1, width, 16),
+        painter.drawText(QRectF(text_left, rect.center().y(), width, rect.height() / 2 - bottom),
                          int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), meta)
         painter.restore()
 
@@ -722,27 +732,11 @@ class MainWindow(QMainWindow):
         queue, queue_layout = card()
         self.queue_card = queue
         shadow(queue)
-        header = QFrame()
-        header.setObjectName("panelHeader")
-        header.setFixedHeight(40)
-        header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        header_row = QHBoxLayout(header)
-        header_row.setContentsMargins(14, 0, 10, 0)
-        header_row.setSpacing(8)
-        header_row.addWidget(section("媒体队列"))
-        self.count = label("0 个文件", muted=True)
-        header_row.addWidget(self.count)
-        header_row.addStretch()
+        header_row, self.count, self.add_button = self._add_queue_header(queue_layout)
         self.queue_tools = QWidget()
         queue_tools = QHBoxLayout(self.queue_tools)
         queue_tools.setContentsMargins(0, 0, 0, 0)
         queue_tools.setSpacing(8)
-        self.add_button = Button("添加")
-        self.add_button.setIcon(line_icon("plus", 15))
-        self.add_button.setIconSize(QSize(15, 15))
-        self.add_button.setToolTip("添加视频、音频或图片（Ctrl+O）")
-        self.add_button.clicked.connect(self.choose_files)
-        queue_tools.addWidget(self.add_button)
         queue_tools.addWidget(label("批量格式", muted=True))
         self.batch_format = Combo()
         self.batch_format.setObjectName("batchFormat")
@@ -770,15 +764,11 @@ class MainWindow(QMainWindow):
         self.batch_settings_button = Button("批量参数")
         self.batch_settings_button.clicked.connect(self._show_batch_settings)
         queue_tools.addWidget(self.batch_settings_button)
-        self.clear_button = Button("清空列表")
-        self.clear_button.clicked.connect(self._clear_jobs)
-        queue_tools.addWidget(self.clear_button)
         header_row.addWidget(self.queue_tools)
-        queue_layout.addWidget(header)
 
         self.column_header = QFrame()
         self.column_header.setObjectName("columnHeader")
-        self.column_header.setFixedHeight(26)
+        self.column_header.setFixedHeight(QUEUE_COLUMN_HEIGHT)
         self.column_header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.column_row = QHBoxLayout(self.column_header)
         self.column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2], 0)
@@ -787,13 +777,10 @@ class MainWindow(QMainWindow):
         gap.setFixedWidth(THUMB_SIZE.width())
         self.column_row.addWidget(gap)
         self.column_row.addWidget(column_title("名称"), 1)
-        self.column_cells: dict[str, QLabel] = {}
-        for key, text, width in (("duration", "时长", W_DURATION), ("size", "大小", W_SIZE),
-                                 ("state", "状态", W_STATE), ("format", "输出格式", W_FORMAT),
-                                 ("remove", "", W_REMOVE)):
+        for text, width in (("时长", W_DURATION), ("大小", W_SIZE), ("状态", W_STATE),
+                            ("输出格式", W_FORMAT), ("", W_REMOVE)):
             cell = column_title(text)
             cell.setFixedWidth(width)
-            self.column_cells[key] = cell
             self.column_row.addWidget(cell)
         self.column_header.hide()
         queue_layout.addWidget(self.column_header)
@@ -817,6 +804,9 @@ class MainWindow(QMainWindow):
         self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.remove_shortcut.activated.connect(self._remove_selected)
         queue_layout.addWidget(self.list, 1)
+        self.clear_button = self._add_queue_footer(queue_layout)
+        self.list.installEventFilter(self)
+        self.preview_files.installEventFilter(self)
 
         inspector, right = card()
         inspector.setObjectName("conversionInspector")
@@ -1167,15 +1157,6 @@ class MainWindow(QMainWindow):
         extra = (bar.width() or bar.sizeHint().width()) if bar.maximum() > 0 else 0
         self.column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2] + extra, 0)
 
-    def _apply_columns(self) -> None:
-        """窗口窄的时候先让「大小」列退场，把宽度让给文件名。"""
-        narrow = self.width() < 1120
-        cell = self.column_cells.get("size")
-        if cell is not None:
-            cell.setVisible(not narrow)
-        for row in self.rows.values():
-            row.size_label.setVisible(not narrow)
-
     def _toggle_details(self) -> None:
         self._show_details()
 
@@ -1244,69 +1225,80 @@ class MainWindow(QMainWindow):
         self._show_selected()
         self._refresh_controls()
 
-    def _build_preview_rail(self):
-        self.preview_rail = QFrame()
-        self.preview_rail.setObjectName("mediaQueuePanel")
-        shadow(self.preview_rail, 12, 2, 19)
-        self.preview_rail.hide()
-        rail = QVBoxLayout(self.preview_rail)
-        rail.setContentsMargins(12, 10, 12, 12)
-        rail.setSpacing(8)
-
-        header = QHBoxLayout()
-        header.setSpacing(6)
-        self.rail_title = QLabel("媒体队列")
-        self.rail_title.setObjectName("railTitle")
-        header.addWidget(self.rail_title)
-        self.rail_count = QLabel("0 个文件")
-        self.rail_count.setObjectName("railCount")
-        header.addWidget(self.rail_count)
+    def _add_queue_header(self, panel):
+        frame = QFrame()
+        frame.setObjectName("panelHeader")
+        frame.setFixedHeight(44)
+        header = QHBoxLayout(frame)
+        header.setContentsMargins(9, 0, 9, 0)
+        header.setSpacing(5)
+        title = label("媒体队列")
+        title.setObjectName("queueTitle")
+        header.addWidget(title)
+        count = ElidedLabel("0 个文件")
+        count.setObjectName("queueCount")
+        count.setProperty("muted", True)
+        count.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        count.setFixedWidth(76)
+        header.addWidget(count)
+        add = Button("添加")
+        add.setIcon(line_icon("plus", 15))
+        add.setIconSize(QSize(15, 15))
+        add.setFixedSize(64, 30)
+        add.setToolTip("添加视频、音频或图片（Ctrl+O）")
+        add.clicked.connect(self.choose_files)
+        header.addWidget(add)
         header.addStretch(1)
-        self.rail_add = Button("添加")
-        self.rail_add.setIcon(line_icon("plus", 15))
-        self.rail_add.setIconSize(QSize(15, 15))
-        self.rail_add.setMinimumHeight(31)
-        self.rail_add.setToolTip("添加视频、音频或图片（Ctrl+O）")
-        self.rail_add.clicked.connect(self.choose_files)
-        header.addWidget(self.rail_add)
-        rail.addLayout(header)
-        rule = QFrame()
-        rule.setObjectName("queueRule")
-        rule.setFixedHeight(1)
-        rail.addWidget(rule)
+        panel.addWidget(frame)
+        return header, count, add
+
+    def _add_queue_footer(self, panel):
+        footer = QFrame()
+        footer.setObjectName("queueFooter")
+        actions = QHBoxLayout(footer)
+        actions.setContentsMargins(12, 6, 12, 8)
+        clear = Button("清空列表")
+        clear.setIcon(line_icon("trash", 16))
+        clear.setIconSize(QSize(16, 16))
+        clear.setToolTip("移除队列里的全部文件")
+        clear.clicked.connect(self._clear_jobs)
+        actions.addWidget(clear)
+        actions.addStretch(1)
+        panel.addWidget(footer)
+        return clear
+
+    def _build_preview_rail(self):
+        self.preview_rail, rail = card()
+        shadow(self.preview_rail)
+        self.preview_rail.hide()
+        _, self.rail_count, self.rail_add = self._add_queue_header(rail)
+        # 宽模式表头占用的高度留作间距，让文件行在切换时保持纵向对齐。
+        rail.addSpacing(QUEUE_COLUMN_HEIGHT)
 
         self.preview_files = PreviewFiles(self._queued_media)
         self.preview_files.setObjectName("previewFiles")
         self.preview_files.setAccessibleName("媒体预览文件")
         self.preview_files.setToolTip("单击切换文件，按住左键拖到视频帧或音轨")
-        self.preview_files.setIconSize(RAIL_THUMB_SIZE)
+        self.preview_files.setIconSize(THUMB_SIZE)
+        self.preview_files.setFrameShape(QFrame.Shape.NoFrame)
         self.preview_files.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.preview_files.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.preview_files.currentItemChanged.connect(self._preview_file_changed)
         rail.addWidget(self.preview_files, 1)
 
-        self.rail_clear = Button("清空列表")
-        self.rail_clear.setIcon(line_icon("trash", 17))
-        self.rail_clear.setIconSize(QSize(17, 17))
-        self.rail_clear.setMinimumHeight(36)
-        self.rail_clear.setToolTip("移除队列里的全部文件")
-        self.rail_clear.clicked.connect(self._clear_jobs)
-        rail.addWidget(self.rail_clear)
+        self.rail_clear = self._add_queue_footer(rail)
+
+    def eventFilter(self, widget, event):
+        if event.type() == QEvent.Type.Show and widget in (self.list, self.preview_files):
+            previous = self.preview_files if widget is self.list else self.list
+            offset = previous.verticalScrollBar().value()
+            widget.doItemsLayout()
+            widget.verticalScrollBar().setValue(offset)
+        return super().eventFilter(widget, event)
 
     def _update_preview_item(self, job):
-        icon = QPixmap(RAIL_THUMB_SIZE)
-        icon.fill(C.track)
-        painter = QPainter(icon)
-        if job.picture is not None:
-            image = job.picture.scaled(icon.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                       Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((icon.width() - image.width()) // 2, (icon.height() - image.height()) // 2, image)
-        else:
-            mark = {VideoInfo: "视频", AudioInfo: "音频", ImageInfo: "图片"}.get(type(job.info), "···")
-            painter.setPen(C.text3)
-            painter.drawText(icon.rect(), Qt.AlignmentFlag.AlignCenter, mark)
-        painter.end()
         item = self.preview_items[job.key]
-        item.setIcon(QIcon(icon))
+        item.setIcon(QIcon(queue_thumbnail(job)))
         item.setData(QueueDelegate.META_ROLE, rail_meta(job))
         item.setToolTip(f"{job.path.name}\n{rail_meta(job)}")
 
@@ -1376,7 +1368,7 @@ class MainWindow(QMainWindow):
             preview_item = QListWidgetItem(path.name)
             preview_item.setData(Qt.ItemDataRole.UserRole, key)
             preview_item.setToolTip(str(path))
-            preview_item.setSizeHint(QSize(0, 66))
+            preview_item.setSizeHint(QSize(0, ROW_HEIGHT))
             self.preview_items[key] = preview_item
             self.preview_files.addItem(preview_item)
             self._update_preview_item(job)
@@ -1566,8 +1558,6 @@ class MainWindow(QMainWindow):
                 editor.fit_settings_density(self.height() < 850 or editor.configuration_only)
             self.page_transition.rail_width = self._rail_width()
             self.page_transition.invalidate()
-        if hasattr(self, "column_cells"):
-            self._apply_columns()
         if hasattr(self, "preview"):
             self._show_selected()
 
@@ -1581,8 +1571,12 @@ class MainWindow(QMainWindow):
         busy = self.scope is not None
         selected = self._selected()
         has_files = bool(self.jobs)
-        self.count.setText(f"{len(self.jobs)} 个文件")
-        self.rail_count.setText(f"{len(self.jobs)} 个文件")
+        self.count.set_full_text(f"{len(self.jobs)} 个文件")
+        self.rail_count.set_full_text(self.count.full_text)
+        for button in (self.add_button, self.rail_add):
+            button.setEnabled(not busy and self.tools is not None)
+        self.clear_button.parentWidget().setVisible(has_files)
+        self.rail_clear.parentWidget().setVisible(has_files)
         self.rail_clear.setEnabled(has_files and not busy)
         self.queue_tools.setVisible(has_files)
         self.column_header.setVisible(has_files)
@@ -1591,7 +1585,6 @@ class MainWindow(QMainWindow):
         self.drop_area.set_compact(has_files)
         self.drop_area.setEnabled(not busy and self.tools is not None)
         self._sync_column_header()
-        self._apply_columns()
         for key, row in self.rows.items():
             row.remove_button.setEnabled(not busy)
             queued = self.jobs[key].queued
@@ -1631,7 +1624,7 @@ class MainWindow(QMainWindow):
         self.batch_settings_button.setEnabled(not busy and bool(formats))
         if self.mounted_editor is not None:
             self.mounted_editor.settings_body.setEnabled(not busy and selected is not None and selected.queued)
-        self.clear_button.setEnabled(not busy)
+        self.clear_button.setEnabled(has_files and not busy)
         resizable = bool(formats & RESIZABLE_FORMATS)
         self.resolution.setVisible(not formats or resizable)
         self.resolution.setVisible(not formats or resizable)

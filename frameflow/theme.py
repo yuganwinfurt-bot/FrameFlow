@@ -102,10 +102,9 @@ QFrame#bottomTaskBar QProgressBar { background: #C9D4E9; min-height: 7px; max-he
 QFrame#bottomTaskBar QPushButton#primary { font-size: 16px; font-weight: 700; color: #FFFFFF; }
 QFrame#bottomTaskBar QPushButton#primary:disabled { color: %(text3)s; }
 QLabel#taskStatus, QLabel#taskPercent { color: %(text)s; font-size: 15px; font-weight: 700; }
-QFrame#mediaQueuePanel { background: #F8FAFF; border: 1px solid %(border)s; border-radius: 14px; }
-QFrame#queueRule { background: %(divider)s; border: none; }
-QLabel#railTitle { color: %(text)s; font-size: 16px; font-weight: 700; }
-QLabel#railCount { color: %(text2)s; font-size: 13px; }
+QFrame#queueFooter { background: transparent; border: none; border-top: 1px solid %(divider)s; }
+QLabel#queueTitle { color: %(text)s; font-size: 15px; font-weight: 700; }
+QLabel#queueCount { font-size: 12px; }
 QFrame#inspectorActions { background: transparent; border: none; border-top: 1px solid %(divider)s; }
 QFrame#dialogFooter { background: %(surface_alt)s; border: none; border-top: 1px solid %(border)s; }
 QFrame#columnHeader { background: %(surface_alt)s; border: none; border-bottom: 1px solid %(divider)s; }
@@ -179,13 +178,11 @@ QLabel#statLabel { color: %(text3)s; font-size: 11px; }
 QFrame#statRule { background: %(border)s; border: none; }
 QFrame#detailRule { background: %(border_soft)s; border: none; }
 
-QListWidget#queue { background: transparent; border: none; outline: 0; padding: 0; }
-QListWidget#queue::item { background: transparent; border: none; }
-QListWidget#queue::item:selected { background: transparent; }
-QListWidget#previewFiles { background: transparent; border: none; outline: 0; padding: 0; }
-QListWidget#previewFiles::item { color: %(text)s; padding: 2px; border-radius: 6px; font-size: 12px; }
-QListWidget#previewFiles::item:hover { background: #EEF3F9; }
-QListWidget#previewFiles::item:selected { background: %(accent_soft)s; color: %(text)s; }
+QListWidget#queue, QListWidget#previewFiles {
+    background: transparent; border: none; outline: 0; padding: 0;
+}
+QListWidget#queue::item, QListWidget#previewFiles::item { background: transparent; border: none; }
+QListWidget#queue::item:selected, QListWidget#previewFiles::item:selected { background: transparent; }
 
 QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit {
     background: %(surface)s; color: %(text)s; border: 1px solid %(border)s;

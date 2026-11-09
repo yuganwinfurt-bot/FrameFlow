@@ -1858,6 +1858,46 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(window.queue_card.geometry().right() + 1, window.inspector.x())
         self.assertTrue(window.pages.isHidden())
 
+    def test_queue_styles_keep_header_row_height_and_scroll_aligned(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(window.minimumSize())
+        window.show()
+        files = [self.root / f"附件 {index:02}.pdf" for index in range(16)]
+        for path in files:
+            path.write_bytes(b"%PDF-1.4")
+        window.add_paths(files, generated=True)
+        self.app.processEvents()
+        table, rail = window.list, window.preview_files
+        table.setCurrentRow(5)
+        table.verticalScrollBar().setValue(95)
+        before = table.currentItem().data(Qt.ItemDataRole.UserRole)
+        add_position = window.add_button.mapTo(window.page_host, QPoint())
+        table_row = table.visualItemRect(table.currentItem())
+        table_y = table.viewport().mapTo(window.page_host, table_row.topLeft()).y()
+        self.assertTrue(window.batch_button.isVisible())
+        self.assertTrue(window.rows[before].size_label.isVisible())
+        self.assertEqual(window.count.text(), "16 个文件")
+        self.assertLess(window.count.geometry().right(), window.add_button.geometry().left())
+
+        window.navigation.setCurrentIndex(1)
+        self.wait_for(lambda: not window.page_transition.running, "窄队列就绪")
+        self.assertEqual(window.rail_add.mapTo(window.page_host, QPoint()), add_position)
+        self.assertEqual(rail.currentItem().data(Qt.ItemDataRole.UserRole), before)
+        self.assertEqual(rail.verticalScrollBar().value(), 95)
+        rail_row = rail.visualItemRect(rail.currentItem())
+        self.assertEqual(rail_row.height(), table_row.height())
+        self.assertEqual(rail.viewport().mapTo(window.page_host, rail_row.topLeft()).y(), table_y)
+        self.assertEqual(window.count.text(), window.rail_count.text())
+        self.assertLess(window.rail_count.geometry().right(), window.rail_add.geometry().left())
+        rail.verticalScrollBar().setValue(130)
+
+        window.navigation.setCurrentIndex(0)
+        self.wait_for(lambda: not window.page_transition.running, "宽队列恢复")
+        self.assertEqual(table.verticalScrollBar().value(), 130)
+        self.assertEqual(table.currentItem().data(Qt.ItemDataRole.UserRole), before)
+        self.assertTrue(window.batch_button.isVisible())
+
     def test_page_transition_keeps_playback_and_edit_state_through_reversal(self):
         window = MainWindow(self.tools)
         self.addCleanup(window.close)
