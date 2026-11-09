@@ -2636,7 +2636,8 @@ class Editor(QDialog):
         self.picture_group.setVisible(isinstance(self.info, ImageInfo) if self.configuration_only else picture)
         self.export_group.setVisible(not isinstance(self.info, ImageInfo) if self.configuration_only else video or audio)
         self.directory_group.setVisible(self.configuration_only or not details)
-        self.inspector.setVisible(not self.configuration_only and not details)
+        # 切页时先为右栏保留原有位置，设置控件在被遮挡时才移回。
+        self.inspector.setVisible(not details)
         self._panel_picture = picture
         self._load_formats()
         self._sync_export_rows()

@@ -11,7 +11,7 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QMimeData, QObject, QPoint, QPointF, QProcess, QRect, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
                            QKeySequence, QPainter, QPen, QPixmap, QShortcut)
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QDialog, QLineEdit, QMenu,QPushButton, QScrollArea, QVBoxLayout, 
     QApplication, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel,
     QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QScrollArea,
-    QPlainTextEdit, QSizePolicy, QSplitter, QStackedWidget, QStyle, QStyledItemDelegate,
+    QPlainTextEdit, QSizePolicy, QStackedWidget, QStyle, QStyledItemDelegate,
     QVBoxLayout, QWidget,
 )
 
@@ -44,6 +44,8 @@ ROW_HEIGHT = 58
 ROW_SPACING = 8
 ROW_MARGINS = (10, 6, 8, 6)
 RAIL_MIN_WIDTH = 232
+CONVERSION_FOOTER_HEIGHT = 65
+PREVIEW_FOOTER_HEIGHT = 56
 
 VIDEO_FORMATS = (("mp4", "MP4 · H.264"), ("mkv_hevc", "MKV · H.265"), ("mkv", "MKV · H.264"),
                  ("webm", "WebM · VP9"), ("mov", "MOV · H.264"), ("avi", "AVI · MPEG-4"), ("gif", "GIF · 动图"))
@@ -702,32 +704,21 @@ class MainWindow(QMainWindow):
         self.page_host = QWidget()
         self.page_host.setObjectName("pageWorkspace")
         self.page_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
-        self.page_area = QHBoxLayout(self.page_host)
-        self.page_area.setContentsMargins(0, 0, 0, 0)
-        self.page_area.setSpacing(10)
         self._build_preview_rail()
         self.pages = QStackedWidget()
+        self.pages.setObjectName("pageWorkspace")
+        self.pages.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.preview_undo = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self.page_host)
         self.preview_undo.setContext(Qt.ShortcutContext.WindowShortcut)
         self.preview_undo.setEnabled(False)
         self.preview_undo.activated.connect(self._undo_preview_edit)
         self.pages.currentChanged.connect(self._update_preview_undo)
-        self.page_area.addWidget(self.pages, 1)
         root.addWidget(self.page_host, 1)
-        self.page_transition = PageTransition(self.page_host, C.bg.name())
-        self.page_transition.animation.finished.connect(self._restore_page_focus)
         self.conversion_page = QWidget()
         self.pages.addWidget(self.conversion_page)
-        layout = QVBoxLayout(self.conversion_page)
-        layout.setContentsMargins(18, 12, 18, 12)
-        layout.setSpacing(0)
         self.empty_preview = label("请先在格式转换页选择一个媒体文件。", muted=True)
         self.empty_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pages.addWidget(self.empty_preview)
-        columns = QSplitter(Qt.Orientation.Horizontal)
-        columns.setChildrenCollapsible(False)
-        columns.setHandleWidth(0)
-        columns.setChildrenCollapsible(False)
         queue, queue_layout = card()
         self.queue_card = queue
         shadow(queue)
@@ -826,7 +817,6 @@ class MainWindow(QMainWindow):
         self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.remove_shortcut.activated.connect(self._remove_selected)
         queue_layout.addWidget(self.list, 1)
-        columns.addWidget(queue)
 
         inspector, right = card()
         inspector.setObjectName("conversionInspector")
@@ -1049,14 +1039,12 @@ class MainWindow(QMainWindow):
         right.addWidget(actions)
 
         self.inspector = inspector
-        inspector.setFixedWidth(352)
-        inspector.setMinimumWidth(300)
+        inspector.setFixedWidth(self._settings_width())
         inspector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        columns.addWidget(inspector)
-        columns.setStretchFactor(0, 1)
-        columns.setStretchFactor(1, 0)
-        columns.setSizes([900, 352])
-        layout.addWidget(columns, 1)
+        self.page_transition = PageTransition(
+            self.page_host, queue, self.preview_rail, inspector, self.pages, self._rail_width())
+        self.page_transition.settings_location_changed.connect(self._move_page_settings)
+        self.page_transition.settled.connect(self._settle_page)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -1077,7 +1065,6 @@ class MainWindow(QMainWindow):
 
         footer = QFrame()
         footer.setObjectName("footer")
-        footer.setFixedHeight(65)
         self.footer = footer
         footer_row = QHBoxLayout(footer)
         footer_row.setContentsMargins(16, 8, 16, 10)
@@ -1086,14 +1073,18 @@ class MainWindow(QMainWindow):
         footer_row.addWidget(self.progress)
         footer_row.addWidget(self.cancel_button)
         footer_row.addWidget(self.start_button)
-        root.addWidget(footer)
-        root.addWidget(self._build_preview_footer())
+        self.page_footers = QStackedWidget()
+        self.page_footers.addWidget(footer)
+        self.page_footers.addWidget(self._build_preview_footer())
+        self.page_footers.setFixedHeight(CONVERSION_FOOTER_HEIGHT)
+        self.page_transition.animation.valueChanged.connect(self._resize_page_footer)
+        self.page_transition.animation.valueChanged.connect(self.navigation.set_position)
+        root.addWidget(self.page_footers)
 
     def _build_preview_footer(self):
         """预览页底栏：和转换页同一个布局——状态文字、细进度条、取消、开始。"""
         self.preview_footer = QFrame()
         self.preview_footer.setObjectName("footer")
-        self.preview_footer.setFixedHeight(56)
         line = QHBoxLayout(self.preview_footer)
         line.setContentsMargins(16, 8, 16, 10)
         line.setSpacing(12)
@@ -1118,7 +1109,6 @@ class MainWindow(QMainWindow):
         self.preview_start.setIconSize(QSize(15, 15))
         self.preview_start.clicked.connect(self.start_export)
         line.addWidget(self.preview_start)
-        self.preview_footer.hide()
         return self.preview_footer
 
     def _build_menu(self) -> None:
@@ -1257,7 +1247,6 @@ class MainWindow(QMainWindow):
     def _build_preview_rail(self):
         self.preview_rail = QFrame()
         self.preview_rail.setObjectName("mediaQueuePanel")
-        self.preview_rail.setFixedWidth(RAIL_MIN_WIDTH)
         shadow(self.preview_rail, 12, 2, 19)
         self.preview_rail.hide()
         rail = QVBoxLayout(self.preview_rail)
@@ -1302,7 +1291,6 @@ class MainWindow(QMainWindow):
         self.rail_clear.setToolTip("移除队列里的全部文件")
         self.rail_clear.clicked.connect(self._clear_jobs)
         rail.addWidget(self.rail_clear)
-        self.page_area.addWidget(self.preview_rail)
 
     def _update_preview_item(self, job):
         icon = QPixmap(RAIL_THUMB_SIZE)
@@ -1328,7 +1316,8 @@ class MainWindow(QMainWindow):
         key = current.data(Qt.ItemDataRole.UserRole)
         if key in self.items:
             self.list.setCurrentItem(self.items[key])
-            self._edit_selected()
+            if self.page_transition.target_preview:
+                self._edit_selected()
 
     def _queued_media(self, key):
         job = self.jobs.get(key)
@@ -1463,6 +1452,8 @@ class MainWindow(QMainWindow):
             self.preview_files.setCurrentItem(self.preview_items.get(selected.key) if selected else None)
         self._show_selected()
         self._refresh_controls()
+        if self.page_transition.target_preview:
+            self._show_page(self._editor_for(selected) or self.empty_preview)
 
     def _job_extension(self, job) -> str:
         kind = job.output_format or ""
@@ -1538,7 +1529,7 @@ class MainWindow(QMainWindow):
             self.inspector_pill.show()
         else:
             self.inspector_pill.hide()
-        if self.pages.currentWidget() is self.conversion_page:
+        if not self.page_transition.settings_in_preview:
             self._mount_selected_settings(job)
         self.details_button.setEnabled(bool(job and job.info))
         self.details_button.setToolTip(
@@ -1567,14 +1558,14 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        if hasattr(self, "preview_rail"):
-            self.preview_rail.setFixedWidth(max(RAIL_MIN_WIDTH, min(320, round(self.width() * .185))))
         if hasattr(self, "inspector"):
             width = self._settings_width()
             self.inspector.setFixedWidth(width)
             for editor in self.editors.values():
                 editor.inspector.setFixedWidth(width)
                 editor.fit_settings_density(self.height() < 850 or editor.configuration_only)
+            self.page_transition.rail_width = self._rail_width()
+            self.page_transition.invalidate()
         if hasattr(self, "column_cells"):
             self._apply_columns()
         if hasattr(self, "preview"):
@@ -1671,8 +1662,7 @@ class MainWindow(QMainWindow):
 
     def _sync_footer(self, page) -> None:
         preview = page is not self.conversion_page
-        self.footer.setVisible(not preview)
-        self.preview_footer.setVisible(preview)
+        self.page_footers.setCurrentWidget(self.preview_footer if preview else self.footer)
         editor = page if isinstance(page, Editor) else None
         busy = editor is not None and editor.scope is not None
         video = editor is not None and editor.video_page is not None and editor.tabs.currentWidget() is editor.video_page
@@ -1690,7 +1680,7 @@ class MainWindow(QMainWindow):
         self.preview_percent.setText(f"{value}%" if maximum else "…")
 
     def _refresh_preview_footer(self, editor):
-        if self.pages.currentWidget() is editor:
+        if self.navigation.currentIndex() == 1 and self.pages.currentWidget() is editor:
             self._sync_footer(editor)
 
     def _cancel_preview_task(self):
@@ -1699,6 +1689,9 @@ class MainWindow(QMainWindow):
 
     def _settings_width(self):
         return max(306, min(445, round(self.width() * .255)))
+
+    def _rail_width(self):
+        return max(RAIL_MIN_WIDTH, min(320, round(self.width() * .185)))
 
     def _editor_for(self, job):
         if not self.tools or not job or not job.info or job.path.suffix.lower() == ".pdf":
@@ -1845,56 +1838,49 @@ class MainWindow(QMainWindow):
         self._show_page(self.conversion_page)
 
     def _update_preview_undo(self):
-        self.preview_undo.setEnabled(isinstance(self.pages.currentWidget(), Editor))
+        self.preview_undo.setEnabled(
+            self.navigation.currentIndex() == 1 and isinstance(self.pages.currentWidget(), Editor))
 
     def _undo_preview_edit(self):
         page = self.pages.currentWidget()
         if isinstance(page, Editor):
             page.undo()
 
-    def _show_page(self, page):
-        current = self.pages.currentWidget()
-        if current is page:
-            return
-        transition = self.page_transition
-        preview = page is not self.conversion_page
-        was_preview = current is not self.conversion_page
-        animate = self.page_host.isVisible() and preview != was_preview
-        transition.cancel()
-        queue = self.preview_rail if was_preview else self.queue_card
-        old_scene = self.page_host.grab() if animate else None
-        old_queue = queue.grab() if animate and preview else None
-        queue_origin = queue.mapTo(self.page_host, QPoint())
-        queue_width = queue.width()
-        if isinstance(current, Editor):
-            current.suspend()
-        self._unmount_settings()
-        self.preview_rail.setVisible(preview)
-        self.page_area.setContentsMargins(*((18, 12, 18, 12) if preview else (0, 0, 0, 0)))
-        if isinstance(page, Editor):
-            page.inspector.setFixedWidth(self._settings_width())
-            page.fit_settings_density(self.height() < 850)
-        self.pages.setCurrentWidget(page)
-        self._sync_footer(page)
-        if not preview:
-            self.inspector.setFixedWidth(self._settings_width())
+    def _resize_page_footer(self, position):
+        height = CONVERSION_FOOTER_HEIGHT + (PREVIEW_FOOTER_HEIGHT - CONVERSION_FOOTER_HEIGHT) * position
+        self.page_footers.setFixedHeight(round(height))
+
+    def _move_page_settings(self, in_preview):
+        if in_preview:
+            self._unmount_settings()
+        else:
             self._show_selected()
-        self.page_area.activate()
-        if animate:
-            page_origin = page.mapTo(self.page_host, QPoint())
-            incoming = page.grab()
-            target_scene = self.page_host.grab()
-            transition.reveal(
-                old_scene, incoming, target_scene, self.page_host.rect(), entering=preview,
-                queue=old_queue, queue_origin=queue_origin, from_width=queue_width,
-                to_width=self.preview_rail.width(), incoming_origin=page_origin,
-            )
+
+    def _settle_page(self):
+        if not self.page_transition.target_preview:
+            if isinstance(current := self.pages.currentWidget(), Editor):
+                current.suspend()
+            self.pages.setCurrentWidget(self.conversion_page)
+        self._restore_page_focus()
+
+    def _show_page(self, page):
+        preview = page is not self.conversion_page
+        current = self.pages.currentWidget()
         with QSignalBlocker(self.navigation):
             self.navigation.setCurrentIndex(int(preview))
-        self.navigation.indicator.move_to(int(preview))
-        if isinstance(page, Editor):
-            page.start_media()
-            page.resume()
+        if preview and page is not current:
+            if isinstance(current, Editor):
+                current.suspend()
+            if isinstance(page, Editor):
+                page.inspector.setFixedWidth(self._settings_width())
+                page.fit_settings_density(self.height() < 850 or page.configuration_only)
+            self.pages.setCurrentWidget(page)
+            if isinstance(page, Editor):
+                page.start_media()
+                page.resume()
+        self._sync_footer(page)
+        self._update_preview_undo()
+        self.page_transition.move_to(preview)
 
     @Slot(object)
     def _register_editor_output(self, path: Path) -> None:
@@ -1932,8 +1918,6 @@ class MainWindow(QMainWindow):
         locate.clicked.connect(lambda: self._open_original_folders(folders))
         notice.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         notice.open()
-        if replace_preview:
-            self.page_transition.cancel()
         for job in missing:
             self._remove_job(job.key)
         if replace_preview:
@@ -2082,6 +2066,8 @@ class MainWindow(QMainWindow):
             return
         editor = self.editors.pop(key, None)
         if editor is not None:
+            if self.pages.currentWidget() is editor:
+                self.pages.setCurrentWidget(self.empty_preview)
             if editor is self.mounted_editor:
                 self._unmount_settings()
             editor.shutdown()
@@ -2102,6 +2088,8 @@ class MainWindow(QMainWindow):
         self.inspections.cancel()
         self.inspections = Processes()
         self._unmount_settings()
+        if self.page_transition.target_preview:
+            self.pages.setCurrentWidget(self.empty_preview)
         for editor in self.editors.values():
             editor.shutdown()
             self.pages.removeWidget(editor)
@@ -2211,8 +2199,9 @@ class MainWindow(QMainWindow):
 
     def start_export(self) -> None:
         page = self.pages.currentWidget()
-        if isinstance(page, Editor):
-            page.save_edit()
+        if self.navigation.currentIndex() == 1:
+            if isinstance(page, Editor):
+                page.save_edit()
             return
         if self.scope is not None or self.tools is None or any(
             job.queued and job.state == "读取中" for job in self.jobs.values()
@@ -2325,7 +2314,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.closing = True
-        self.page_transition.cancel()
+        self.page_transition.animation.stop()
         for editor in self.editors.values():
             editor.shutdown()
         self.editors.clear()

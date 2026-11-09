@@ -28,7 +28,7 @@ from frameflow.media import (convert, hardware_acceleration_choices, probe, thum
                              video_encoder_args)
 from frameflow.window import MainWindow
 from frameflow.editor import Editor
-from frameflow.editing import Clip, audio_preview, index_frames, length
+from frameflow.editing import Clip, audio_preview, index_frames, length, render_edit
 from frameflow.motion import Combo, QUEUED_MEDIA
 
 
@@ -680,6 +680,7 @@ class WorkflowTest(unittest.TestCase):
                           first.export_settings.output_fps), ("mkv_hevc", 1280, 30))
         window.navigation.setCurrentIndex(1)
         self.assertIs(window.pages.currentWidget(), shared)
+        self.wait_for(lambda: not window.page_transition.running, "预览转场结束")
         self.assertIs(shared.settings_scroll.widget(), shared.settings_body)
         self.wait_for(lambda: shared.frames and shared.scope is None, "视频读取结束")
         shared.quality.setValue(27)
@@ -687,6 +688,7 @@ class WorkflowTest(unittest.TestCase):
         with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(directory)):
             shared.choose_directory()
         window.navigation.setCurrentIndex(0)
+        self.wait_for(lambda: not window.page_transition.running, "返回转换页")
         self.assertIs(window.mounted_editor, shared)
         self.assertEqual(shared.quality.value(), 27)
         self.assertEqual(window._job_export(first).quality, 27)
@@ -933,7 +935,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertIsInstance(editor, Editor)
         self.assertFalse(editor.isWindow())
         self.assertEqual(window.navigation.currentIndex(), 1)
-        self.wait_for(lambda: editor.frames and editor.scope is None, "内嵌视频就绪")
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+                      "内嵌视频就绪")
         self.app.processEvents()
         inspector = editor.findChild(QWidget, "studioInspector")
         video_inspector = inspector.geometry()
@@ -951,8 +954,10 @@ class WorkflowTest(unittest.TestCase):
         self.assertTrue(window.preview_start.visibleRegion().boundingRect().contains(window.preview_start.rect()))
         editor.cursor.setValue(8)
         window.navigation.setCurrentIndex(0)
+        self.wait_for(lambda: not window.page_transition.running, "返回转换页")
         self.assertIs(window.pages.currentWidget(), window.conversion_page)
         window.navigation.setCurrentIndex(1)
+        self.wait_for(lambda: not window.page_transition.running, "返回预览页")
         self.assertIs(window.pages.currentWidget(), editor)
         self.assertEqual(editor.cursor.value(), 8)
 
@@ -1028,8 +1033,10 @@ class WorkflowTest(unittest.TestCase):
                 QTest.mouseClick(editor.audio_play, Qt.MouseButton.LeftButton)
                 self.wait_for(lambda: editor.playing and view.playhead > paused, "从暂停位置续播")
                 window.navigation.setCurrentIndex(0)
+                self.wait_for(lambda: not window.page_transition.running, "退出音频预览")
                 self.assertFalse(editor.playing)
                 window.navigation.setCurrentIndex(1)
+                self.wait_for(lambda: not window.page_transition.running, "返回音频预览")
 
         self.assertEqual(view.interval, initial)
         self.assertGreater(view.insertion, 0)
@@ -1162,7 +1169,8 @@ class WorkflowTest(unittest.TestCase):
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "素材导入")
         window.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and window.page_transition.isHidden(), "编辑器就绪")
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+                      "编辑器就绪")
         base = editor.frames.count
         keys = {job.path: key for key, job in window.jobs.items()}
         left = window.preview_files
@@ -1443,7 +1451,8 @@ class WorkflowTest(unittest.TestCase):
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         video_editor = window.pages.currentWidget()
         window.navigation.setCurrentIndex(0)
-        self.wait_for(lambda: video_editor.scope is None and video_editor.frame_scope is None
+        self.wait_for(lambda: not window.page_transition.running and
+                      video_editor.scope is None and video_editor.frame_scope is None
                       and video_editor.filmstrip.scope is None, "视频预览已释放文件")
         moved_video = self.root / "移动后的视频.mov"
         video.rename(moved_video)
@@ -1698,25 +1707,18 @@ class WorkflowTest(unittest.TestCase):
         self.wait_for(lambda: following.selection_motion.value == 1, "快速切回完成")
         self.assertEqual(first.selection_motion.value, 0)
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "侧栏缩略图")
-        nav_frames, page_frames = [], []
-        window.navigation.indicator.valueChanged.connect(nav_frames.append)
+        page_frames = []
         transition = window.page_transition
         transition.animation.valueChanged.connect(page_frames.append)
         window.navigation.setCurrentIndex(1)
-        self.assertTrue(transition.isVisible())
-        self.assertGreater(transition.from_width, transition.to_width)
-        editor = window.pages.currentWidget()
-        self.assertEqual(transition.geometry(), window.page_host.rect())
-        self.assertGreater(transition.incoming_origin.x(), 0)
-        self.assertEqual(transition.incoming.width(), editor.width())
+        self.assertTrue(transition.running)
         self.wait_for(lambda: .15 < transition.position < .8, "预览从右侧滑入")
         window.navigation.setCurrentIndex(0)
-        self.assertFalse(transition.entering)
-        self.wait_for(lambda: transition.isHidden(), "中途返回格式转换")
+        self.assertFalse(transition.target_preview)
+        self.wait_for(lambda: not transition.running, "中途返回格式转换")
         self.assertIs(window.pages.currentWidget(), window.conversion_page)
         window.navigation.setCurrentIndex(1)
-        self.wait_for(lambda: window.navigation.indicator.value == 1 and transition.isHidden(), "页面过渡")
-        self.assertGreaterEqual(len({value for value in nav_frames if 0 < value < 1}), 3)
+        self.wait_for(lambda: window.navigation.position == 1 and not transition.running, "页面过渡")
         self.assertGreaterEqual(len({value for value in page_frames if 0 < value < 1}), 3)
         # 预览页固定窄队列，不再有展开/收起
         self.assertGreaterEqual(window.preview_rail.width(), 232)
@@ -1737,7 +1739,219 @@ class WorkflowTest(unittest.TestCase):
         window.preview_files.setCurrentRow(1)
         self.assertIs(window.pages.currentWidget(), editor)
         window.navigation.setCurrentIndex(0)
+        self.wait_for(lambda: not transition.running, "返回格式转换")
         self.assertTrue(window.preview_rail.isHidden())
+
+    def test_page_transition_moves_real_widgets_in_both_directions(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.show()
+        window.add_paths([self.source])
+        self.wait_for(lambda: window.mounted_editor is not None, "转换设置就绪")
+        editor = window.mounted_editor
+        settings = editor.settings_body
+        host = window.page_host
+        transition = window.page_transition
+        start_queue = window.queue_card.geometry()
+        start_inspector = window.inspector.geometry()
+        self.assertIs(host.layout(), transition)
+        self.assertIs(window.pages.parentWidget(), host)
+        self.assertTrue(window.pages.isHidden())
+
+        window.navigation.setCurrentIndex(1)
+        transition.animation.pause()
+
+        def sample(fraction):
+            transition.animation.setCurrentTime(round(transition.animation.duration() * fraction))
+            self.app.processEvents()
+            rail = window.queue_card if window.preview_rail.isHidden() else window.preview_rail
+            center = editor.workspace_split.widget(0)
+            self.assertEqual(window.navigation.position, transition.position)
+            self.assertLessEqual(rail.geometry().right(), window.pages.x())
+            return (rail.width(), center.mapTo(host, QPoint()).x(),
+                    editor.inspector.mapTo(host, QPoint()).x())
+
+        initial = sample(0)
+        self.assertEqual(initial[0], start_queue.width())
+        self.assertIs(window.mounted_editor, editor)
+        start_x = window.pages.x()
+        first_motion = sample(.23)
+        self.assertLess(first_motion[0], initial[0])
+        self.assertLess(window.pages.x(), start_x)
+        early = sample(.35)
+        self.assertTrue(window.inspector.isVisible())
+        self.assertIs(window.mounted_editor, editor)
+        self.assertLess(early[0], first_motion[0])
+        self.assertLess(early[1], first_motion[1])
+        self.assertEqual(early[1] - first_motion[1], early[2] - first_motion[2])
+        late = sample(.72)
+        self.assertTrue(window.inspector.isHidden())
+        self.assertIs(editor.settings_scroll.widget(), settings)
+        self.assertLess(late[0], early[0])
+        self.assertEqual(late[1] - early[1], late[2] - early[2])
+        transition.animation.resume()
+        self.wait_for(lambda: not transition.running, "预览完全进入")
+        self.assertEqual(window.preview_rail.width(), window._rail_width())
+        right = host.contentsRect().right() - transition.contentsMargins().right()
+        self.assertEqual(window.pages.geometry().right(), right)
+        self.assertTrue(window.queue_card.isHidden())
+        self.assertIs(window.pages.currentWidget(), editor)
+        point = editor.frame_view.mapTo(host, editor.frame_view.rect().center())
+        self.assertTrue(editor.isAncestorOf(host.childAt(point)))
+
+        window.navigation.setCurrentIndex(0)
+        transition.animation.pause()
+        self.assertEqual(sample(.72), late)
+        self.assertEqual(sample(.35), early)
+        self.assertIs(window.mounted_editor, editor)
+        transition.animation.resume()
+        self.wait_for(lambda: not transition.running, "转换工作区恢复")
+        self.assertEqual(window.queue_card.geometry(), start_queue)
+        self.assertEqual(window.inspector.geometry(), start_inspector)
+        self.assertTrue(window.pages.isHidden())
+        self.assertTrue(window.preview_rail.isHidden())
+        self.assertIs(window.pages.currentWidget(), window.conversion_page)
+
+    def test_page_transition_reverses_in_place_and_handles_window_resize(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.show()
+        transition = window.page_transition
+
+        def click(index):
+            QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
+                             pos=window.navigation.tabRect(index).center())
+
+        click(1)
+        transition.animation.pause()
+        transition.animation.setCurrentTime(transition.animation.duration() // 2)
+        self.app.processEvents()
+        position = transition.position
+        geometry = window.pages.geometry()
+        for index in (0, 1, 0, 1, 0, 1):
+            click(index)
+            self.assertEqual(window.navigation.currentIndex(), index)
+            self.assertEqual(transition.position, position)
+            self.assertEqual(window.pages.geometry(), geometry)
+
+        window.resize(window.minimumSize())
+        self.app.processEvents()
+        self.assertTrue(transition.running)
+        self.assertEqual(transition.position, position)
+        self.assertNotEqual(window.pages.width(), geometry.width())
+        window.showMaximized()
+        self.app.processEvents()
+        self.assertEqual(transition.position, position)
+        window.showNormal()
+        self.app.processEvents()
+        self.assertEqual(transition.position, position)
+        transition.animation.resume()
+        self.wait_for(lambda: not transition.running, "窄窗口完成切页")
+        self.assertEqual(window.preview_rail.width(), window._rail_width())
+        self.assertEqual(window.pages.x(), window.preview_rail.geometry().right() + 1 + transition.spacing())
+        right = window.page_host.contentsRect().right() - transition.contentsMargins().right()
+        self.assertEqual(window.pages.geometry().right(), right)
+        self.assertIs(window.pages.currentWidget(), window.empty_preview)
+        click(0)
+        self.wait_for(lambda: not transition.running, "窄窗口返回")
+        self.assertEqual(window.inspector.geometry().right(), right)
+        self.assertEqual(window.queue_card.geometry().right() + 1, window.inspector.x())
+        self.assertTrue(window.pages.isHidden())
+
+    def test_page_transition_keeps_playback_and_edit_state_through_reversal(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(window.minimumSize())
+        window.show()
+        window.add_paths([self.source])
+        self.wait_for(lambda: window.mounted_editor is not None, "选中视频")
+        window.navigation.setCurrentIndex(1)
+        editor = window.pages.currentWidget()
+        transition = window.page_transition
+        self.wait_for(lambda: editor.frames and editor.scope is None and not transition.running, "视频预览就绪")
+        editor.quality.setValue(27)
+        editor.player_volume.setValue(35)
+        video = tuple(editor.video)
+        with patch("frameflow.playback.WaveOutput"):
+            editor.play_button.click()
+            player = editor.playback
+            self.wait_for(lambda: player.started is not None, "视频正在播放")
+            window.navigation.setCurrentIndex(0)
+            self.wait_for(lambda: 0 < transition.position < .85, "播放中退出预览")
+            self.assertIs(editor.playback, player)
+            window.navigation.setCurrentIndex(1)
+            self.wait_for(lambda: not transition.running, "反向回到预览")
+            self.assertIs(editor.playback, player)
+            window.navigation.setCurrentIndex(0)
+            self.wait_for(lambda: not transition.running, "完整退出预览")
+            self.assertIsNone(editor.playback)
+        paused_at = editor.cursor.value()
+        window.navigation.setCurrentIndex(1)
+        self.wait_for(lambda: not transition.running, "重新进入原编辑器")
+        self.assertIs(window.pages.currentWidget(), editor)
+        self.assertEqual(tuple(editor.video), video)
+        self.assertEqual(editor.cursor.value(), paused_at)
+        self.assertEqual(editor.player_volume.value(), 35)
+        self.assertEqual(editor.quality.value(), 27)
+        self.assertEqual(window._selected().path, self.source)
+
+    def test_page_transition_during_batch_conversion_and_editor_export(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.show()
+        window.add_paths([self.source])
+        self.wait_for(lambda: window.mounted_editor is not None, "选中待转换视频")
+        job = window._selected()
+        release = threading.Event()
+
+        def hold(operation):
+            def run(*args, **kwargs):
+                if not release.wait(15):
+                    raise MediaError("测试未释放转换任务")
+                return operation(*args, **kwargs)
+            return run
+
+        with patch("frameflow.window.convert", side_effect=hold(convert)):
+            window.start_button.click()
+            try:
+                scope = window.scope
+                self.assertIsNotNone(scope)
+                self.wait_for(lambda: job.state == "转换中", "批量转换已启动")
+                for index in (1, 0):
+                    window.navigation.setCurrentIndex(index)
+                    self.wait_for(lambda: not window.page_transition.running, "任务中切页")
+                    self.assertIs(window.scope, scope)
+                    self.assertFalse(scope.cancelled.is_set())
+                self.assertTrue(window.cancel_button.isEnabled())
+                self.assertFalse(window.mounted_editor.settings_body.isEnabled())
+            finally:
+                release.set()
+            self.wait_for(lambda: window.scope is None, "转换完成")
+        self.assertTrue(job.output.is_file())
+        self.decode(job.output)
+
+        window.navigation.setCurrentIndex(1)
+        editor = window.pages.currentWidget()
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+                      "可导出编辑结果")
+        outputs = []
+        editor.saved.connect(outputs.append)
+        release.clear()
+        with patch("frameflow.editor.render_edit", side_effect=hold(render_edit)):
+            window.preview_start.click()
+            try:
+                scope = editor.scope
+                self.assertIsNotNone(scope)
+                for index in (0, 1):
+                    window.navigation.setCurrentIndex(index)
+                    self.wait_for(lambda: not window.page_transition.running, "编辑导出中切页")
+                    self.assertIs(editor.scope, scope)
+                    self.assertFalse(scope.cancelled.is_set())
+                self.assertTrue(window.preview_cancel.isEnabled())
+            finally:
+                release.set()
+            self.wait_for(lambda: outputs and editor.scope is None, "编辑导出完成")
+        self.decode(outputs[0])
 
 
 if __name__ == "__main__":

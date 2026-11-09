@@ -1,12 +1,12 @@
 """自绘控件与转场动画。颜色统一从 theme 取，避免和样式表走样。"""
 
 
-from PySide6.QtCore import (QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
+from PySide6.QtCore import (QAbstractAnimation, QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
                             QVariantAnimation)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QComboBox, QStyle, QStyleOptionSlider, QHBoxLayout, QLabel, QListView, QLineEdit, QPushButton, QSizePolicy, QSlider,
                                QSpinBox, QStyle, QStyleOptionButton, QStyleOptionSpinBox, QStyleOptionViewItem, QTabBar,
-                               QStyledItemDelegate, QVBoxLayout, QWidget)
+                               QStyledItemDelegate, QLayout, QVBoxLayout, QWidget)
 
 from .theme import C, RADIUS, RADIUS_SMALL, chevron
 from .icons import pixmap as line_pixmap
@@ -54,8 +54,11 @@ class NavigationBar(QTabBar):
         self.setExpanding(False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setDrawBase(False)
-        self.indicator = Motion(self)
-        self.currentChanged.connect(self.indicator.move_to)
+        self.position = 0.0
+
+    def set_position(self, position):
+        self.position = position
+        self.update()
 
     def tabSizeHint(self, index):
         return QSize(142, 43)
@@ -67,10 +70,9 @@ class NavigationBar(QTabBar):
         painter.setBrush(C.sunken)
         radius = RADIUS - 2
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(0, 0, -0.5, -0.5), radius, radius)
-        position = self.indicator.value
         left = self.tabRect(0)
         right = self.tabRect(1)
-        active = QRectF(left).translated((right.left() - left.left()) * position, 0)
+        active = QRectF(left).translated((right.left() - left.left()) * self.position, 0)
         active = active.adjusted(2, 2, -2, -2)
         painter.setBrush(C.accent_soft)
         painter.setPen(QPen(C.border, 1))
@@ -103,95 +105,117 @@ class NavigationBar(QTabBar):
         painter.end()
 
 
-class PageTransition(QWidget):
-    """旧工作区留在底层，新页面从右侧进入；队列同时收窄到预览侧栏。"""
+class PageTransition(QLayout):
+    """同一布局负责静止和转场时的几何，预览区由父窗口自然裁剪。"""
 
-    def __init__(self, parent, background):
+    settings_location_changed = Signal(bool)
+    settled = Signal()
+
+    def __init__(self, parent, queue, rail, conversion_settings, workspace, rail_width):
         super().__init__(parent)
-        self.background = QColor(background)
+        self._items = []
+        self.queue = queue
+        self.rail = rail
+        self.conversion_settings = conversion_settings
+        self.workspace = workspace
+        self.rail_width = rail_width
+        self.target_preview = False
+        self.settings_in_preview = False
+        self.setContentsMargins(18, 12, 18, 12)
+        self.setSpacing(10)
+        for widget in (queue, rail, conversion_settings, workspace):
+            self.addWidget(widget)
+        self.workspace.hide()
+        self.workspace.raise_()
+
         self.animation = QVariantAnimation(self)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.setDuration(360)
         self.animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        self.animation.valueChanged.connect(self.update)
-        self.animation.finished.connect(self.cancel)
-        self.scene = self.queue = self.incoming = self.target = None
-        self.hide()
-        parent.installEventFilter(self)
+        self.animation.valueChanged.connect(self._relayout)
+        self.animation.finished.connect(self.settled)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def sizeHint(self):
+        return QSize(0, 0)
 
     @property
     def position(self):
-        return float(self.animation.currentValue() or 0)
+        return float(self.animation.currentValue())
 
-    def cancel(self):
-        self.animation.stop()
-        self.hide()
-        self.scene = self.queue = self.incoming = self.target = None
+    @property
+    def running(self):
+        return self.animation.state() != QAbstractAnimation.State.Stopped
 
-    def reveal(self, scene, incoming, target, bounds, *, entering,
-               queue=None, queue_origin=QPoint(), from_width=0, to_width=0,
-               incoming_origin=QPoint()):
-        self.cancel()
-        self.scene = scene
-        self.queue = queue
-        self.incoming = incoming
-        self.target = target
-        self.queue_origin = queue_origin
-        self.from_width, self.to_width = from_width, to_width
-        self.incoming_origin = incoming_origin
-        self.entering = entering
-        self.setGeometry(bounds)
-        self.animation.setStartValue(0.0)
-        self.animation.setEndValue(1.0)
-        self.animation.setDuration(270)
-        self.raise_()
-        self.show()
-        self.animation.start()
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Resize and self.isVisible():
-            self.cancel()
-        return super().eventFilter(obj, event)
-
-    def paintEvent(self, event):
-        if self.scene is None or self.incoming is None:
+    def move_to(self, preview):
+        if self.target_preview == preview:
             return
-        painter = QPainter(self)
-        progress = max(0.0, min(1.0, self.position))
-        if self.entering:
-            if self.target is not None:
-                # Use the finished preview layout as the backdrop. The old queue
-                # is drawn once on top of it while the editor slides in; painting
-                # the old full-page snapshot as well caused duplicate rows/text.
-                if progress >= .985:
-                    painter.drawPixmap(0, 0, self.target)
-                    painter.end()
-                    return
-                painter.drawPixmap(0, 0, self.target)
-                editor_rect = QRect(self.incoming_origin, self.incoming.size())
-                painter.fillRect(editor_rect, self.background)
-            else:
-                painter.drawPixmap(0, 0, self.scene)
-        elif self.target is not None:
-            painter.drawPixmap(0, 0, self.target)
-        if self.entering and self.queue is not None and progress < .985:
-            width = round(self.from_width + (self.to_width - self.from_width) * progress)
-            origin = self.queue_origin
-            if width > 0:
-                # Reveal progressively less of the old queue while keeping its
-                # text at a readable size. The finished preview rail replaces it
-                # in the final few milliseconds of the slide.
-                painter.save()
-                painter.setClipRect(QRect(origin.x(), origin.y(), width, self.queue.height()))
-                painter.drawPixmap(origin, self.queue)
-                painter.restore()
-            start_x = self.width() + 8
-            target_x = self.incoming_origin.x()
-            x = round(start_x + (target_x - start_x) * progress)
-            painter.drawPixmap(x, self.incoming_origin.y(), self.incoming)
-        else:
-            # 返回转换页时，让预览整体向右退场，下面的队列页面从左侧露出。
-            x = round((self.width() + 8) * progress)
-            painter.drawPixmap(x, 0, self.scene)
-        painter.end()
+        self.target_preview = preview
+        if not self.parentWidget().isVisible():
+            self._finish()
+            return
+        self.animation.setDirection(QAbstractAnimation.Direction.Forward if preview
+                                    else QAbstractAnimation.Direction.Backward)
+        if not self.running:
+            self.animation.start()
+
+    def _finish(self):
+        self.animation.stop()
+        self.animation.setCurrentTime(self.animation.duration() if self.target_preview else 0)
+        self._relayout(self.position)
+        self.settled.emit()
+
+    def _relayout(self, _position):
+        self.setGeometry(self.parentWidget().contentsRect())
+
+    def setGeometry(self, bounds):
+        super().setGeometry(bounds)
+        if not bounds.isValid() or not hasattr(self, "animation"):
+            return
+        area = self.contentsRect()
+        position = self.position
+        settings_width = self.conversion_settings.width()
+        workspace_width = max(0, area.width() - self.rail_width - self.spacing())
+        travelled = round(workspace_width * position)
+        leading_edge = area.right() + 1 - travelled
+
+        # 缩窄旧右栏的可见部分，并在新右栏露面前移交共用的设置控件。
+        center_width = workspace_width - settings_width
+        handoff = settings_width + round(.6 * max(0, center_width - settings_width))
+        exposed = round(settings_width * max(0, 1 - travelled / handoff))
+        old_settings_x = leading_edge - exposed
+        gap = round(self.spacing() * position)
+        queue_width = max(0, old_settings_x - area.left() - gap)
+        # 表格工具栏放不下时换成紧凑队列，两套视图的边界始终相同。
+        compact_width = max(self.queue.minimumSizeHint().width(), self.rail_width + 80)
+        compact_width = min(compact_width, area.width() - settings_width - 1)
+        compact = position > 0 and queue_width <= compact_width
+        queue_bounds = QRect(area.left(), area.top(), queue_width, area.height())
+        self.queue.setGeometry(queue_bounds)
+        self.rail.setGeometry(queue_bounds)
+        self.conversion_settings.setGeometry(old_settings_x, area.top(), settings_width, area.height())
+        self.workspace.setGeometry(leading_edge, area.top(), workspace_width, area.height())
+
+        in_preview = position > 0 and exposed == 0
+        if in_preview != self.settings_in_preview:
+            self.settings_in_preview = in_preview
+            self.settings_location_changed.emit(in_preview)
+        self.queue.setVisible(not compact)
+        self.rail.setVisible(compact)
+        self.conversion_settings.setVisible(not in_preview)
+        self.workspace.setVisible(position > 0)
 
 
 class Button(QPushButton):
