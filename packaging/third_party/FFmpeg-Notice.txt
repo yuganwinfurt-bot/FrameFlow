@@ -1,0 +1,7 @@
+FFmpeg and FFprobe 9.0.2 (Gyan Windows Essentials build)
+Copyright (c) the FFmpeg developers. Distributed as separate executable programs.
+Build information: https://www.gyan.dev/ffmpeg/builds/
+FFmpeg upstream source: https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz
+Source repository: https://github.com/FFmpeg/FFmpeg
+The bundled FFmpeg programs are licensed under GNU GPL version 3 or later.
+See FFmpeg-GPL-3.0.txt. Run ffmpeg.exe -version to inspect the build configuration.
