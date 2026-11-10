@@ -110,11 +110,14 @@ class Filmstrip(QAbstractScrollArea):
         value = max(0, min(4, value))
         if self.zoom == value:
             return
+        bar = self.horizontalScrollBar()
+        offset = self.current - 1 - bar.value()
+        old_span = self._span()
         self.zoom = value
         self._set_scroll_range()
-        if self.drop_x is None:
-            self.set_current(self.current)
-        self._retarget_gap()
+        if self.drop_x is None and 0 <= offset < old_span:
+            bar.setValue(self.current - 1 - round(offset * self._span() / old_span))
+        self._scrolled(bar.value())
         self.zoom_changed.emit(value)
 
     def _tile_rect(self, column, slots=None):

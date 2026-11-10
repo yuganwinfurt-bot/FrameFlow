@@ -93,6 +93,9 @@ class _ParameterWheelFilter(QObject):
         picture_preset = isinstance(widget, QTabBar) and widget.objectName() == "picturePreset"
         if not (adjusts_value or picture_preset):
             return False
+        if isinstance(control, WheelSlider) and control.apply_wheel(event):
+            event.accept()
+            return True
 
         # Use the viewport's normal wheel path, including pixel-only touchpad events.
         # Stop at a dialog or popup boundary so an unscrollable dialog cannot scroll the window behind it.
@@ -858,6 +861,49 @@ class ClickSlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
+class WheelSlider(ClickSlider):
+    """An opt-in slider with one action per wheel detent or touchpad distance."""
+
+    def __init__(self, orientation, *, wheel_step=1, adjust=None, can_adjust=None):
+        super().__init__(orientation)
+        self.wheel_step = wheel_step
+        self.adjust = adjust
+        self.can_adjust = can_adjust
+        self._wheel_remainder = 0
+        self._wheel_unit = 0
+
+    def apply_wheel(self, event):
+        if (not self.isEnabled() or not self.isVisible() or not QRectF(self.rect()).contains(event.position())
+                or (self.can_adjust is not None and not self.can_adjust())):
+            return False
+        pixel = event.pixelDelta()
+        delta, unit = (event.angleDelta(), 120) if pixel.isNull() else (pixel, 32)
+        if unit != self._wheel_unit or event.phase() == Qt.ScrollPhase.ScrollBegin:
+            self._wheel_unit, self._wheel_remainder = unit, 0
+        if abs(delta.y()) > abs(delta.x()):
+            self._wheel_remainder += delta.y()
+            steps = int(self._wheel_remainder / unit)
+            self._wheel_remainder -= steps * unit
+            if steps:
+                if self.adjust is None:
+                    self.setValue(self.value() + steps * self.wheel_step)
+                else:
+                    self.adjust(steps)
+            if event.phase() == Qt.ScrollPhase.ScrollEnd:
+                self._wheel_remainder = 0
+            return True
+        if event.phase() == Qt.ScrollPhase.ScrollEnd:
+            self._wheel_remainder = 0
+        return False
+
+    def wheelEvent(self, event):
+        event.setAccepted(self.apply_wheel(event))
+
+    def leaveEvent(self, event):
+        self._wheel_remainder = 0
+        super().leaveEvent(event)
+
+
 class QualityRow(QWidget):
     """质量微调：标题 + 当前值 + 说明 + 滑轨 + 两端提示。
 
@@ -876,7 +922,7 @@ class QualityRow(QWidget):
     def __init__(self, label: str = "质量微调", minimum: int = 18, maximum: int = 34,
                  value: int = 23, parent=None, hint: str = "", icon_name: str = "",
                  detailed: bool = False, *, values=None, unit: str = "",
-                 lossless_hint: str = "") -> None:
+                 lossless_hint: str = "", crf_wheel: bool = False) -> None:
         super().__init__(parent)
         self.setObjectName("qualityRow")
         self.detailed = detailed
@@ -912,7 +958,9 @@ class QualityRow(QWidget):
         self.note.setWordWrap(True)
         box.addWidget(self.note)
 
-        self.slider = ClickSlider(Qt.Orientation.Horizontal)
+        self.slider = (WheelSlider(Qt.Orientation.Horizontal, adjust=self._wheel_crf,
+                                   can_adjust=lambda: self.measure == "CRF" and not self._lossless)
+                       if crf_wheel else ClickSlider(Qt.Orientation.Horizontal))
         self.slider.setObjectName("qualitySlider")
         self._minimum = int(minimum)
         self._maximum = int(maximum)
@@ -1005,6 +1053,13 @@ class QualityRow(QWidget):
     def _emit_settled(self, *_):
         if not self._lossless:
             self.settled.emit(int(self._position_to_domain(self.slider.value())))
+
+    def _wheel_crf(self, steps):
+        before = self.value()
+        self.setValue(before - steps)
+        if self.value() != before:
+            self._settle_timer.stop()
+            self._emit_settled()
 
     def set_measure(self, measure: str) -> None:
         self.measure = measure

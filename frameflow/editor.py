@@ -32,7 +32,7 @@ from .media import (AUDIO_EXTENSIONS, HARDWARE_BACKENDS, VIDEO_FRAME_RATES, VIDE
                     hardware_acceleration_choices)
 from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _save_image, estimate_image_size,
                     media_path_missing, probe, thumbnail)
-from .motion import (Button, ClickSlider, Combo, DirectoryButton, DirectoryPathEdit, Motion, QualityRow, SpinBox,
+from .motion import (Button, Combo, DirectoryButton, DirectoryPathEdit, Motion, QualityRow, SpinBox, WheelSlider,
                      hide_vertical_scroll_bar, queued_media_key)
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
@@ -991,14 +991,14 @@ class WaveView(PreviewLabel):
                 painter.drawLine(QPointF(x, bounds.top() - 6), QPointF(x, bounds.bottom()))
 
 
-class VolumeSlider(ClickSlider):
+class VolumeSlider(WheelSlider):
     """竖直音量滑轨：从底部按数值向上填充，避免 QSS 在垂直方向上的反向问题。"""
 
     TRACK_WIDTH = 4
     HANDLE = 12
 
     def __init__(self, orientation=Qt.Orientation.Vertical):
-        super().__init__(orientation)
+        super().__init__(orientation, wheel_step=5)
         self.setRange(0, 100)
         self.setFixedWidth(24)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1296,7 +1296,7 @@ class Editor(QDialog):
             volume_panel = QWidget()
             volume_layout = QHBoxLayout(volume_panel)
             volume_layout.addWidget(_text("音量"))
-            self.player_volume = QSlider(Qt.Orientation.Horizontal)
+            self.player_volume = WheelSlider(Qt.Orientation.Horizontal, wheel_step=5)
             self.player_volume.setRange(0, 100)
             self.player_volume.setValue(self.playback_level)
             self.player_volume.setAccessibleName("播放音量")
@@ -1761,13 +1761,14 @@ class Editor(QDialog):
         # ---- 3. 质量微调 -------------------------------------------------
         self.quality = QualityRow("质量微调", 18, 34, 23,
                                   hint="CRF 越小画质越高，文件通常越大。",
-                                  icon_name="sliders")
+                                  icon_name="sliders", crf_wheel=True)
         self.quality.setToolTip("CRF 越小越清晰、文件越大；22–26 是日常分享的常用区间。")
         self.estimate_throttle = QTimer(self)
         self.estimate_throttle.setSingleShot(True)
         self.estimate_throttle.setInterval(120)
         self.estimate_throttle.timeout.connect(self._refresh_estimate)
         self.quality.changed.connect(self._schedule_estimate_tick)
+        self.quality.settled.connect(self.estimate_throttle.stop)
         self.quality.settled.connect(self._refresh_estimate)
         self.quality.settled.connect(self._sync_preset)
         self.export_edge.currentIndexChanged.connect(self._sync_preset)
@@ -2022,7 +2023,7 @@ class Editor(QDialog):
             self.timeline_header.addLayout(timeline_title, 1)
             locate = QHBoxLayout()
             locate.setSpacing(5)
-            self.timeline_zoom = QSlider(Qt.Orientation.Horizontal)
+            self.timeline_zoom = WheelSlider(Qt.Orientation.Horizontal)
             self.timeline_zoom.setObjectName("timelineZoom")
             self.timeline_zoom.setRange(0, 4)
             self.timeline_zoom.setValue(4)
@@ -3369,7 +3370,7 @@ class Editor(QDialog):
         if popup is None:
             return
         self.volume_hide.stop()
-        popup.set_level(self.playback_level)
+        popup.set_level(0 if self.playback_muted else self.playback_level)
         corner = self.volume_button.mapToGlobal(QPoint(0, 0))
         x = corner.x() + self.volume_button.width() // 2 - popup.width() // 2
         y = corner.y() - popup.height() - 6
@@ -3394,10 +3395,9 @@ class Editor(QDialog):
         if value:
             self.last_audible_level = value
         self.playback_muted = False
+        with QSignalBlocker(self.player_volume):
+            self.player_volume.setValue(value)
         self._update_player_volume()
-        popup = getattr(self, "volume_popup", None)
-        if popup is not None and popup.isVisible():
-            popup.set_level(value)
 
     def _toggle_player_mute(self):
         if self.playback_level == 0:
@@ -3410,6 +3410,8 @@ class Editor(QDialog):
         effective = 0 if self.playback_muted else self.playback_level
         self.volume_value.setText(f"{effective}%")
         self.volume_button.setIcon(icons.icon("volume" if effective else "mute", 18, "#FFFFFF", 2))
+        if self.volume_popup.isVisible():
+            self.volume_popup.set_level(effective)
         if self.playback is not None:
             self.playback.set_volume(effective / 100)
 

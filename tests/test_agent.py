@@ -227,8 +227,9 @@ class AgentWorkspaceTest(unittest.TestCase):
         check_scroll(page.history)
         check_scroll(page.input)
 
-    def send_parameter_wheel(self, widget, *, angle=0, pixels=0):
-        point = widget.rect().center()
+    def send_parameter_wheel(self, widget, *, angle=0, pixels=0, point=None):
+        if point is None:
+            point = widget.rect().center()
         event = QWheelEvent(QPointF(point), QPointF(widget.mapToGlobal(point)), QPoint(0, pixels),
                             QPoint(0, angle), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
                             Qt.ScrollPhase.ScrollUpdate if pixels else Qt.ScrollPhase.NoScrollPhase, False)
@@ -266,7 +267,7 @@ class AgentWorkspaceTest(unittest.TestCase):
                 self.assertGreater((before - bar.value()) * direction, 0)
 
         controls = (editor.preset, editor.container, editor.codec, editor.acceleration,
-                    editor.export_edge, editor.output_fps, editor.audio_bitrate, editor.quality.slider)
+                    editor.export_edge, editor.output_fps, editor.audio_bitrate)
         for page in (0, 1, 2, 0):
             self.nav(page)
             self.settle()
@@ -298,6 +299,53 @@ class AgentWorkspaceTest(unittest.TestCase):
         quality = slider.value()
         QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() - 15, slider.height() // 2))
         self.assertNotEqual(slider.value(), quality)
+
+    def test_hover_wheel_changes_only_video_crf_player_volume_and_timeline_zoom(self):
+        window = self.window
+        for page in (0, 1):
+            self.nav(page)
+            self.settle()
+            editor = window.editors[self.keys[0]]
+            quality = editor.quality
+            quality.setValue(23)
+            editor._refresh_estimate()
+            before = editor.estimate_rows["output"].text()
+            self.send_parameter_wheel(quality.slider, angle=120)
+            self.assertEqual(quality.readout.text(), "CRF 22")
+            self.assertNotEqual(editor.estimate_rows["output"].text(), before)
+            self.send_parameter_wheel(quality.slider, angle=-120, pixels=-32)
+            self.assertEqual(quality.value(), 23)
+            self.send_parameter_wheel(quality.slider, angle=120, point=QPoint(-2, 4))
+            self.assertEqual(quality.value(), 23)
+            quality.set_measure("CQ")
+            self.send_parameter_wheel(quality.slider, angle=120)
+            self.assertEqual(quality.value(), 23)
+            quality.set_measure("CRF")
+
+        self.wait(lambda: editor.frames is not None and editor.scope is None)
+        strip = editor.filmstrip
+        zoom = editor.timeline_zoom
+        bar = strip.horizontalScrollBar()
+        bar.setValue(18)
+        cursor = editor.cursor.value()
+        self.send_parameter_wheel(zoom, angle=-120)
+        self.assertEqual((zoom.value(), strip.zoom), (3, 3))
+        self.assertEqual(editor.cursor.value(), cursor)
+        self.assertEqual(bar.value(), 18)
+        self.send_parameter_wheel(zoom, angle=120)
+        self.assertEqual((zoom.value(), strip.zoom), (4, 4))
+
+        editor._show_volume_popup()
+        slider = editor.volume_popup.slider
+        slider.setValue(50)
+        self.send_parameter_wheel(slider, angle=120)
+        self.assertEqual((editor.playback_level, editor.player_volume.value()), (55, 55))
+        self.assertEqual(editor.volume_popup.label.text(), "55%")
+        self.send_parameter_wheel(slider, pixels=-16)
+        self.assertEqual(editor.playback_level, 55)
+        self.send_parameter_wheel(slider, pixels=-16)
+        self.assertEqual(editor.playback_level, 50)
+        self.assertEqual(editor.player_seek.value(), cursor)
 
     def test_wheel_leaves_model_and_native_dialog_fields_unchanged(self):
         self.nav(2)
