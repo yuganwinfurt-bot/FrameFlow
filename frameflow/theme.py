@@ -60,6 +60,7 @@ class C:
     accent_press = QColor(TOKENS["accent_press"])
     accent_soft = QColor(TOKENS["accent_soft"])
     accent_line = QColor(TOKENS["accent_line"])
+    accent_text = QColor(TOKENS["accent_text"])
     success = QColor(TOKENS["success"])
     success_soft = QColor(TOKENS["success_soft"])
     warning = QColor(TOKENS["warning"])

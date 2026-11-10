@@ -3,7 +3,7 @@
 
 from PySide6.QtCore import (QAbstractAnimation, QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
                             QVariantAnimation)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QComboBox, QStyle, QStyleOptionSlider, QHBoxLayout, QLabel, QListView, QLineEdit, QPushButton, QSizePolicy, QSlider,
                                QSpinBox, QStyle, QStyleOptionButton, QStyleOptionSpinBox, QStyleOptionViewItem, QTabBar,
                                QStyledItemDelegate, QLayout, QVBoxLayout, QWidget)
@@ -538,7 +538,10 @@ class ChoiceDelegate(QStyledItemDelegate):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(C.accent_soft if chosen else C.sunken)
                 painter.drawRoundedRect(box, 7, 7)
-            if chosen:
+            decoration = index.data(Qt.ItemDataRole.DecorationRole)
+            if isinstance(decoration, QIcon) and not decoration.isNull():
+                decoration.paint(painter, QRect(box.left() + 8, box.center().y() - 8, 16, 16))
+            elif chosen:
                 painter.drawPixmap(box.left() + 8, box.center().y() - 8, line_pixmap("check", 16, C.accent.name()))
             body = box.adjusted(32, 0, -7, 0)
             note = index.data(Qt.ItemDataRole.ToolTipRole)

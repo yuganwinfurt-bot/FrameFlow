@@ -70,10 +70,12 @@ class AgentTools(QObject):
         spec("set_resolution", "Set a preset, or an exact long edge in pixels. Source aspect ratio is preserved.",
              {"id": ID, "preset": {"type": "string", "enum": list(PRESETS)},
               "long_edge": {"type": "integer", "minimum": 0, "maximum": 8192}}, ("id",)),
-        spec("set_quality", "Set CRF/CQ for video (lower is clearer), or a quality percentage for lossy images.",
-             {"id": ID, "quality": {"type": "integer", "minimum": 1, "maximum": 100}}, ("id", "quality")),
+        spec("set_quality", "Set video CRF/CQ (lower is clearer), lossy image quality, or a best-effort video size target.",
+             {"id": ID, "quality": {"type": "integer", "minimum": 1, "maximum": 100},
+              "target_mb": {"type": "integer", "minimum": 0, "maximum": 1000,
+                            "description": "Target size in decimal MB. Use 0 to clear the target."}}, ("id",)),
         spec("set_output_directory", "Use the source directory, the user-approved directory, or an exact already-authorized path. "
-             "Ask the user to pick a folder in the Agent toolbar if the tool rejects a path.",
+             "Ask the user to pick a folder with the folder button next to the attachment button if a path is rejected.",
              {"id": ID, "directory": {"type": "string", "maxLength": 2048,
                                       "description": "source, approved, or the exact authorized directory."}}, ("id", "directory")),
         spec("set_output_filename", "Set a filename for one item. A matching extension is optional.",
@@ -216,17 +218,26 @@ class AgentTools(QObject):
             raise ToolError("当前输出格式没有分辨率参数。")
         return self._apply(job, max_edge=PRESETS[preset] if preset is not None else long_edge)
 
-    def set_quality(self, id, quality):
+    def set_quality(self, id, quality=None, target_mb=None):
         job = self._job(id, editable=True)
-        if job.output_format in CODECS and job.output_format != "avi":
-            if not 18 <= quality <= 34:
-                raise ToolError("视频质量范围为 18–34，数值越小越清晰。")
-        elif job.output_format in PICTURE_QUALITY_FORMATS:
-            if not 40 <= quality <= 100:
-                raise ToolError("图片质量范围为 40–100。")
-        else:
-            raise ToolError("此格式没有可调的画质参数。")
-        return self._apply(job, quality=quality)
+        options = {}
+        if quality is not None:
+            if job.output_format in CODECS and job.output_format != "avi":
+                if not 18 <= quality <= 34:
+                    raise ToolError("视频质量范围为 18–34，数值越小越清晰。")
+            elif job.output_format in PICTURE_QUALITY_FORMATS:
+                if not 40 <= quality <= 100:
+                    raise ToolError("图片质量范围为 40–100。")
+            else:
+                raise ToolError("此格式没有可调的画质参数。")
+            options["quality"] = quality
+        if target_mb is not None:
+            if job.output_format not in CODECS:
+                raise ToolError("此工具的目标体积适用于常规视频格式。")
+            options["target_bytes"] = target_mb * 1_000_000
+        if not options:
+            raise ToolError("请指定画质或视频目标体积。")
+        return self._apply(job, **options)
 
     def choose_directory(self):
         path = QFileDialog.getExistingDirectory(self.page, "授权 Agent 使用此输出目录",
@@ -259,7 +270,7 @@ class AgentTools(QObject):
             # Compare text first. Untrusted paths are never opened or resolved.
             chosen = next((path for path in allowed if os.path.normcase(os.path.normpath(path)) == candidate), None)
         if chosen is None:
-            raise ToolError("该目录尚未授权。请点击 AI Agent 顶部的「选择输出目录」。")
+            raise ToolError("该目录尚未授权。请点击输入框左下方的文件夹按钮选择目录。")
         return self._apply(job, directory=chosen)
 
     def set_output_filename(self, id, filename):
@@ -304,7 +315,9 @@ class AgentTools(QObject):
             quality = (f" · CRF/CQ {options.quality}" if options.quality and options.format in CODECS
                        else f" · 质量 {options.quality}%" if options.quality and options.format in PICTURE_QUALITY_FORMATS
                        else "")
-            rows.append((item.key, f"{item.source.name} → {output}\n{title} · {edge}{quality}", str(options.directory)))
+            target = f" · 目标 {options.size_limit / 1_000_000:.3g} MB" if options.size_limit else ""
+            rows.append((item.key, f"{item.source.name} → {output}\n{title} · {edge}{quality}{target}",
+                         str(options.directory)))
         card = PlanCard(rows)
         plan = Plan(uuid4().hex, entries, card, {
             entry.key: {"id": entry.key, "name": entry.source.name, "state": "等待确认", "percent": 0}

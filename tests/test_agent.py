@@ -68,6 +68,24 @@ class AgentWorkspaceTest(unittest.TestCase):
             self.app.processEvents()
             self.assertTrue(self.window.grab().save(str(Path(output) / name)))
 
+    def test_video_size_example_reaches_confirmable_plan(self):
+        self.nav(2)
+        self.settle()
+        self.capture("agent-workspace.png")
+        self.page.example_buttons[1].click()
+        self.assertEqual(self.page.input.toPlainText(), "把视频压缩到 20 MB")
+        agent = self.window.agent_tools
+        key = self.keys[0]
+        result = agent.dispatch("set_quality", json.dumps({"id": key, "target_mb": 20}))
+        self.assertTrue(result["ok"])
+        self.assertEqual(agent.get_media_info(key)["output"]["target_bytes"], 20_000_000)
+        self.assertFalse(agent.dispatch("set_quality", json.dumps({"id": key}))["ok"])
+        agent.prepare_conversion([key])
+        self.assertEqual(agent.pending.entries[0].options.size_limit, 20_000_000)
+        labels = [agent.pending.card.content.itemAt(i).widget() for i in range(agent.pending.card.content.count())]
+        self.assertTrue(any("目标 20 MB" in label.text() for label in labels if hasattr(label, "text")))
+        self.wait(agent.pending.card.confirm.isVisible)
+
     def drop(self, keys, *, batch=False):
         mime = QMimeData()
         mime.setData(QUEUED_MEDIA, keys[0].encode("ascii"))

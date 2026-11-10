@@ -7,13 +7,21 @@ import math
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QProgressBar, QScrollArea, QSizePolicy, QTextBrowser,
-    QTextEdit, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QProgressBar, QScrollArea, QSizePolicy,
+    QStackedWidget, QTextBrowser, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from .icons import icon
 from .motion import Button, QUEUED_MEDIA, QUEUED_MEDIA_BATCH, queued_media_key
 from .theme import C
+
+CHAT_WIDTH = 880
+EXAMPLES = (
+    ("video", "将视频转换为 H.265"),
+    ("sliders", "把视频压缩到 20 MB"),
+    ("wave", "提取视频中的音频"),
+    ("layers", "批量转换队列中的文件"),
+)
 
 
 @dataclass(frozen=True)
@@ -158,6 +166,7 @@ class AgentPage(QFrame):
     attachments_requested = Signal()
     stop_requested = Signal()
     clear_requested = Signal()
+    new_requested = Signal()
     directory_requested = Signal()
 
     def __init__(self, lookup):
@@ -172,72 +181,109 @@ class AgentPage(QFrame):
         self.setObjectName("agentWorkspace")
         self.setAcceptDrops(True)
         self.setStyleSheet(f"""
-            QFrame#agentWorkspace {{ background: {C.surface.name()}; border: 1px solid {C.border.name()};
+            QFrame#agentWorkspace {{ background: {C.surface_alt.name()}; border: 1px solid {C.border.name()};
                                     border-radius: 12px; }}
-            QFrame#agentWorkspace[dragging="true"] {{ border: 2px solid {C.accent.name()}; }}
-            QFrame#agentUserBubble {{ background: {C.accent_soft.name()}; border-radius: 12px; }}
-            QFrame#agentReplyBubble, QFrame#agentAttachment, QFrame#agentPlan {{
-                background: {C.sunken.name()}; border-radius: 9px; }}
+            QLabel#agentBadge {{ background: {C.accent_soft.name()}; border-radius: 12px; }}
+            QLabel#agentBrand {{ font-size: 20px; font-weight: 700; }}
+            QLabel#agentWelcomeTitle {{ font-size: 24px; font-weight: 700; }}
+            QLabel#agentModel {{ font-weight: 600; }}
+            QFrame#agentModelBadge {{ background: {C.sunken.name()}; border-radius: 8px; }}
+            QFrame#agentUserBubble {{ background: {C.accent_soft.name()}; border: 1px solid {C.accent_line.name()};
+                                      border-radius: 12px; }}
+            QFrame#agentReplyBubble, QFrame#agentPlan {{
+                background: {C.surface.name()}; border: 1px solid {C.border_soft.name()}; border-radius: 12px; }}
+            QFrame#agentAttachment {{ background: {C.sunken.name()}; border-radius: 8px; }}
+            QFrame#agentToolStatus {{ background: {C.sunken.name()}; border-radius: 8px; }}
             QTextBrowser#agentMessageText {{ background: transparent; border: 0; padding: 0; }}
-            QFrame#agentComposer {{ background: {C.surface.name()}; border: 1px solid {C.border.name()}; border-radius: 12px; }}
+            QFrame#agentComposer {{ background: {C.surface.name()}; border: 1px solid {C.border.name()}; border-radius: 14px; }}
+            QFrame#agentComposer[dragging="true"] {{ border-color: {C.accent.name()}; }}
             QFrame#agentComposer QTextEdit {{ background: transparent; border: 0; }}
             QScrollArea#agentHistory, QScrollArea#agentPending {{ background: transparent; border: 0; }}
             QScrollArea#agentHistory QWidget#agentHistoryBody, QWidget#agentPendingBody {{ background: transparent; }}
         """)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(9)
+        layout.setContentsMargins(18, 14, 18, 13)
+        layout.setSpacing(11)
         heading = QHBoxLayout()
-        badge = QLabel()
-        badge.setPixmap(icon("robot", 23).pixmap(23, 23))
-        heading.addWidget(badge)
-        title = text_label("AI 助手")
-        title.setObjectName("brand")
-        heading.addWidget(title)
-        heading.addStretch()
-        self.directory_button = Button("选择输出目录")
-        self.directory_button.clicked.connect(self.directory_requested)
-        heading.addWidget(self.directory_button)
-        clear = Button("清空会话")
-        clear.clicked.connect(self.clear_requested)
-        heading.addWidget(clear)
+        heading.setSpacing(8)
+        heading.addWidget(self._badge(40, 22))
+        title_group = QVBoxLayout()
+        title_group.setSpacing(1)
+        title = text_label("FrameFlow AI")
+        title.setObjectName("agentBrand")
+        title_group.addWidget(title)
+        title_group.addWidget(self._muted("通过对话处理视频、音频和图片"))
+        heading.addLayout(title_group, 1)
+        model_badge = QFrame()
+        model_badge.setObjectName("agentModelBadge")
+        model_layout = QVBoxLayout(model_badge)
+        model_layout.setContentsMargins(10, 4, 10, 4)
+        model_layout.setSpacing(1)
+        self.model_name = text_label("")
+        self.model_name.setObjectName("agentModel")
+        self.model_status = self._muted("未连接")
+        model_layout.addWidget(self.model_name)
+        model_layout.addWidget(self.model_status)
+        heading.addWidget(model_badge)
+        new = Button("新建会话")
+        new.setIcon(icon("plus", 15))
+        new.clicked.connect(self.new_requested)
+        heading.addWidget(new)
         self.api_button = Button("API 设置")
         self.api_button.setIcon(icon("gear", 15))
         self.api_button.clicked.connect(self.settings_requested)
         heading.addWidget(self.api_button)
+        more = Button("")
+        more.setFixedWidth(34)
+        more.setIcon(icon("more", 16))
+        more.setAccessibleName("更多会话操作")
+        more.setToolTip("更多会话操作")
+        menu = QMenu(more)
+        menu.addAction(icon("folder", 16), "选择输出目录", self.directory_requested.emit)
+        menu.addAction(icon("trash", 16), "清空会话", self.clear_requested.emit)
+        more.clicked.connect(lambda: menu.popup(more.mapToGlobal(more.rect().bottomLeft())))
+        heading.addWidget(more)
         layout.addLayout(heading)
 
+        self.welcome = self._welcome()
+        self.conversation = QStackedWidget()
+        self.conversation.addWidget(self.welcome)
+        layout.addWidget(self.conversation, 1)
         self.history = QScrollArea()
         self.history.setObjectName("agentHistory")
         self.history.setWidgetResizable(True)
         self.history.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.history.viewport().installEventFilter(self)
         body = QWidget()
         body.setObjectName("agentHistoryBody")
-        self.messages = QVBoxLayout(body)
-        self.messages.setContentsMargins(7, 5, 7, 5)
-        self.messages.setSpacing(9)
-        self.welcome = text_label("拖入媒体或直接提问。转换方案会在这里等待你的确认。")
-        self.welcome.setProperty("muted", True)
-        self.welcome.setWordWrap(True)
-        self.messages.addWidget(self.welcome)
+        center = QHBoxLayout(body)
+        center.setContentsMargins(0, 0, 0, 0)
+        self.message_column = QWidget()
+        self.message_column.setObjectName("agentHistoryBody")
+        self.messages = QVBoxLayout(self.message_column)
+        self.messages.setContentsMargins(8, 9, 8, 9)
+        self.messages.setSpacing(12)
         self.messages.addStretch()
+        center.addWidget(self.message_column, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.history.setWidget(body)
+        self.history.viewport().installEventFilter(self)
         scroll_bar = self.history.verticalScrollBar()
         scroll_bar.valueChanged.connect(self._history_scrolled)
         scroll_bar.rangeChanged.connect(self._history_range_changed)
-        layout.addWidget(self.history, 1)
+        self.conversation.addWidget(self.history)
 
-        self.activity = text_label("")
+        self.activity = self._muted("")
         self.activity.setWordWrap(True)
-        self.activity.setProperty("muted", True)
         self.activity.hide()
-        layout.addWidget(self.activity)
-        panel = QFrame()
+        footer = QWidget()
+        self.footer_layout = QVBoxLayout(footer)
+        self.footer_layout.setContentsMargins(0, 0, 0, 0)
+        self.footer_layout.setSpacing(6)
+        self.footer_layout.addWidget(self.activity)
+        panel = self.composer_panel = QFrame()
         panel.setObjectName("agentComposer")
         composer = QVBoxLayout(panel)
-        composer.setContentsMargins(8, 5, 8, 7)
-        composer.setSpacing(4)
+        composer.setContentsMargins(11, 7, 11, 9)
+        composer.setSpacing(6)
         self.pending_area = QScrollArea()
         self.pending_area.setObjectName("agentPending")
         self.pending_area.setWidgetResizable(True)
@@ -256,24 +302,97 @@ class AgentPage(QFrame):
         composer.addWidget(self.input)
         actions = QHBoxLayout()
         attach = Button("添加附件")
-        attach.setIcon(icon("plus", 15))
+        attach.setIcon(icon("attach", 16))
         attach.clicked.connect(self.attachments_requested)
         actions.addWidget(attach)
+        self.directory_button = Button("")
+        self.directory_button.setFixedWidth(34)
+        self.directory_button.setIcon(icon("folder", 16))
+        self.directory_button.setAccessibleName("选择输出目录")
+        self.directory_button.setToolTip("选择输出目录")
+        self.directory_button.clicked.connect(self.directory_requested)
+        actions.addWidget(self.directory_button)
         actions.addStretch()
-        privacy = text_label("文字和查询到的元数据会发送给模型，媒体文件在本地处理")
-        privacy.setProperty("muted", True)
-        actions.addWidget(privacy)
         self.stop = Button("停止生成")
+        self.stop.setIcon(icon("stop", 15))
         self.stop.clicked.connect(self.stop_requested)
         self.stop.hide()
         actions.addWidget(self.stop)
         self.send_button = Button("发送")
         self.send_button.setObjectName("primary")
+        self.send_button.setIcon(icon("send", 15, "#FFFFFF"))
+        self.send_button.setMinimumWidth(72)
         self.send_button.clicked.connect(self.send)
         actions.addWidget(self.send_button)
         composer.addLayout(actions)
-        layout.addWidget(panel)
+        self.footer_layout.addWidget(panel)
+        privacy = self._muted("文字和相关媒体信息会发送给模型，文件在本机处理")
+        privacy.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.footer_layout.addWidget(privacy)
+        layout.addWidget(footer)
+        self.set_model_status("", "idle")
         self._update_send()
+
+    @staticmethod
+    def _muted(text):
+        label = text_label(text)
+        label.setProperty("muted", True)
+        return label
+
+    @staticmethod
+    def _badge(size, glyph):
+        badge = QLabel()
+        badge.setObjectName("agentBadge")
+        badge.setFixedSize(size, size)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setPixmap(icon("spark", glyph, C.accent_text.name()).pixmap(glyph, glyph))
+        return badge
+
+    def _welcome(self):
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(11)
+        align = Qt.AlignmentFlag.AlignHCenter
+        outer.addStretch()
+        outer.addWidget(self._badge(52, 26), alignment=align)
+        title = text_label("你好，我是 FrameFlow AI")
+        title.setObjectName("agentWelcomeTitle")
+        outer.addWidget(title, alignment=align)
+        outer.addWidget(self._muted("拖入媒体文件，或者直接告诉我你想如何处理。"), alignment=align)
+        examples = QWidget()
+        grid = QGridLayout(examples)
+        grid.setContentsMargins(0, 4, 0, 0)
+        grid.setSpacing(8)
+        self.example_buttons = []
+        for index, (glyph, prompt) in enumerate(EXAMPLES):
+            button = Button(prompt)
+            button.setIcon(icon(glyph, 16, C.accent_text.name()))
+            button.setMinimumSize(184, 38)
+            button.clicked.connect(lambda _, text=prompt: self._fill_example(text))
+            grid.addWidget(button, index // 2, index % 2)
+            self.example_buttons.append(button)
+        outer.addWidget(examples, alignment=align)
+        outer.addStretch()
+        return page
+
+    def _fill_example(self, text):
+        self.input.setPlainText(text)
+        self.input.moveCursor(QTextCursor.MoveOperation.End)
+        self.input.setFocus()
+
+    def set_model_status(self, model, state):
+        model = model or "未配置模型"
+        self.model_name.setText(self.model_name.fontMetrics().elidedText(model, Qt.TextElideMode.ElideRight, 140))
+        self.model_name.setToolTip(model)
+        name, color = {
+            "idle": ("未连接", C.text2),
+            "testing": ("正在连接", C.accent_text),
+            "ok": ("已连接", C.success),
+            "error": ("连接失败", C.danger),
+        }[state]
+        self.model_status.setText(name)
+        self.model_status.setStyleSheet(f"color: {color.name()};")
 
     def _update_send(self):
         self.send_button.setEnabled(not self.busy and bool(self.pending or self.input.toPlainText().strip()))
@@ -281,6 +400,7 @@ class AgentPage(QFrame):
     def set_busy(self, busy):
         self.busy = busy
         self.stop.setVisible(busy)
+        self.send_button.setVisible(not busy)
         self.api_button.setEnabled(not busy)
         self._update_send()
 
@@ -328,10 +448,15 @@ class AgentPage(QFrame):
         self.add_history_widget(bubble, right=user)
         return bubble
 
+    def add_tool_status(self):
+        card = ToolStatusCard()
+        self.add_history_widget(card)
+        return card
+
     def add_history_widget(self, widget, *, right=False):
-        self.welcome.hide()
+        self.conversation.setCurrentWidget(self.history)
         if isinstance(widget, (Bubble, PlanCard)):
-            widget.fit(self.history.viewport().width())
+            widget.fit(min(CHAT_WIDTH, self.history.viewport().width()))
         self.messages.insertWidget(self.messages.count() - 1, widget, alignment=(
             Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft))
 
@@ -344,20 +469,28 @@ class AgentPage(QFrame):
 
     def clear_history(self, keep=None):
         self.follow_history = True
-        for index in range(self.messages.count() - 2, 0, -1):
+        for index in range(self.messages.count() - 2, -1, -1):
             if self.messages.itemAt(index).widget() is not keep:
                 widget = self.messages.takeAt(index).widget()
                 widget.hide()
                 widget.deleteLater()
         self.bubbles.clear()
-        self.welcome.setVisible(keep is None)
+        if keep is None:
+            self.conversation.setCurrentWidget(self.welcome)
+
+    def resizeEvent(self, event):
+        inset = max(0, (event.size().width() - 36 - CHAT_WIDTH) // 2)
+        self.footer_layout.setContentsMargins(inset, 0, inset, 0)
+        super().resizeEvent(event)
 
     def eventFilter(self, obj, event):
         if obj is self.history.viewport() and event.type() == QEvent.Type.Resize:
-            for index in range(1, self.messages.count() - 1):
+            width = min(CHAT_WIDTH, event.size().width())
+            self.message_column.setFixedWidth(width)
+            for index in range(self.messages.count() - 1):
                 widget = self.messages.itemAt(index).widget()
                 if isinstance(widget, (Bubble, PlanCard)):
-                    widget.fit(event.size().width())
+                    widget.fit(width)
         return super().eventFilter(obj, event)
 
     def _drag_keys(self, mime):
@@ -376,9 +509,11 @@ class AgentPage(QFrame):
 
     def _drag_style(self, enabled):
         self.setProperty("dragging", enabled)
-        self.style().unpolish(self)
-        self.style().polish(self)
-        self.update()
+        panel = self.composer_panel
+        panel.setProperty("dragging", enabled)
+        panel.style().unpolish(panel)
+        panel.style().polish(panel)
+        panel.update()
 
     def dragEnterEvent(self, event):
         if self._drag_keys(event.mimeData()):
@@ -399,6 +534,30 @@ class AgentPage(QFrame):
             event.acceptProposedAction()
         else:
             event.ignore()
+
+
+class ToolStatusCard(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.completed = self.failed = 0
+        self.setObjectName("agentToolStatus")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 6, 10, 6)
+        self.badge = QLabel()
+        self.summary = text_label("")
+        self.summary.setProperty("muted", True)
+        row.addWidget(self.badge)
+        row.addWidget(self.summary)
+
+    def record(self, completed, failed):
+        self.completed += completed
+        self.failed += failed
+        glyph, color = ("info", C.warning) if self.failed else ("check", C.accent_text)
+        self.badge.setPixmap(icon(glyph, 15, color.name()).pixmap(15, 15))
+        summary = f"工具执行 · {self.completed} 项成功"
+        if self.failed:
+            summary += f"，{self.failed} 项失败"
+        self.summary.setText(summary)
 
 
 class PlanCard(QFrame):
