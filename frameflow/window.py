@@ -12,7 +12,7 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QModelIndex, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QModelIndex, QObject, QPoint, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
                            QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut)
@@ -547,9 +547,10 @@ def font_metrics_elide(painter: QPainter, text: str, width: float) -> str:
 
 
 class MediaQueue(QListWidget):
-    def __init__(self, lookup_media, can_reorder, reorder, *, narrow=False):
+    def __init__(self, lookup_media, can_reorder, reorder, *, narrow=False, timeline_drag=None):
         super().__init__()
         self.lookup_media = lookup_media
+        self.timeline_drag = timeline_drag
         self.can_reorder, self.reorder = can_reorder, reorder
         self.pressed_media = None
         self.batch_drag = False
@@ -627,6 +628,11 @@ class MediaQueue(QListWidget):
         if motion.active:
             motion.native = True
             motion.track(None)
+        media = self.lookup_media(key) if self.timeline_drag and self.timeline_drag() else None
+        if media and isinstance(media[1], (ImageInfo, VideoInfo)):
+            drag.setPixmap(self._timeline_drag_pixmap(*media))
+            drag.setHotSpot(QPoint(-14, -16))
+        elif motion.active:
             drag.setPixmap(motion.floating)
             drag.setHotSpot(motion.hotspot)
         elif item is not None:
@@ -634,6 +640,35 @@ class MediaQueue(QListWidget):
         drag.exec(Qt.DropAction.CopyAction)
         self._finish_drag(self.viewport().mapFromGlobal(QCursor.pos()), self.drag_slot)
         drag.deleteLater()
+
+    def _timeline_drag_pixmap(self, path, info, picture):
+        size = QSize(96, 32)
+        ratio = self.devicePixelRatioF()
+        pixmap = QPixmap(size * ratio)
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setOpacity(.85)
+        painter.setPen(C.border)
+        painter.setBrush(C.surface)
+        painter.drawRoundedRect(QRectF(1, 1, size.width() - 2, size.height() - 2), 6, 6)
+        if picture is None or picture.isNull():
+            picture = line_pixmap("image" if isinstance(info, ImageInfo) else "video", 18, C.accent.name())
+        image_rect = QRectF(5, 4, 24, 24)
+        fitted_size = picture.size().scaled(24, 24, Qt.AspectRatioMode.KeepAspectRatio)
+        fitted = QRectF(0, 0, fitted_size.width(), fitted_size.height())
+        fitted.moveCenter(image_rect.center())
+        painter.drawPixmap(fitted, picture, QRectF(picture.rect()))
+        font = painter.font()
+        font.setPixelSize(11)
+        painter.setFont(font)
+        painter.setPen(C.text)
+        label = QRectF(34, 0, 56, size.height())
+        name = painter.fontMetrics().elidedText(path.name, Qt.TextElideMode.ElideMiddle, int(label.width()))
+        painter.drawText(label, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
+        painter.end()
+        return pixmap
 
     def _finish_drag(self, point, slot=None):
         motion = self.spring_drag
@@ -1411,7 +1446,12 @@ class MainWindow(QMainWindow):
         self.rail_column_header.hide()
         rail.addWidget(self.rail_column_header)
 
-        self.preview_files = MediaQueue(self._queued_media, self._can_reorder, self._reorder_media, narrow=True)
+        self.preview_files = MediaQueue(
+            self._queued_media, self._can_reorder, self._reorder_media, narrow=True,
+            timeline_drag=lambda: (self.navigation.currentIndex() == 1
+                                   and isinstance(page := self.pages.currentWidget(), Editor)
+                                   and page.timeline.isVisible()),
+        )
         self.preview_files.setObjectName("previewFiles")
         self.preview_files.setAccessibleName("媒体预览文件")
         self.preview_files.setToolTip("单击切换文件。拖到时间线或 AI Agent；在 Agent 中可按 Ctrl 多选。")

@@ -2047,7 +2047,7 @@ class Editor(QDialog):
             locate.addWidget(self.locate_button)
             self.timeline_header.addLayout(locate)
             timeline.addLayout(self.timeline_header)
-            self.filmstrip = Filmstrip(self.tools, self._video_drop_preview)
+            self.filmstrip = Filmstrip(self.tools, self._video_drop_preview, parent=self.timeline)
             self.timeline_zoom.valueChanged.connect(self.filmstrip.set_zoom)
             self.filmstrip.zoom_changed.connect(self.timeline_zoom.setValue)
             self.filmstrip.media_dropped.connect(self._drop_video)
@@ -3596,12 +3596,8 @@ class Editor(QDialog):
     def _video_drop_preview(self, key):
         source = self._queued_source(key)
         if self._ready_video() and source and isinstance(source[1], (VideoInfo, ImageInfo)):
-            path, info, picture = source
-            indexed = self.video_sources.get(path)
-            count = indexed.frames.count if indexed else (
-                1 if isinstance(info, ImageInfo) else max(1, round(info.duration * (info.fps or self.frames.fps)))
-            )
-            return path.name, picture, count
+            path, _, picture = source
+            return path.name, picture
         return None
 
     def _move_video_ranges(self, ranges, position):

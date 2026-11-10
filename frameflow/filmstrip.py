@@ -4,14 +4,15 @@ from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil, floor
 
-from PySide6.QtCore import QRect, QRectF, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractScrollArea, QApplication
+from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QLabel, QToolTip
 
 from .editing import THUMB_HEIGHT, THUMB_WIDTH, frame_tiles, length, slice_track
 from .media import Cancelled, MediaError, Processes
 from .motion import queued_media_key
 from .spring import FrameCompaction, SpringClock, edge_speed
+from .theme import C
 
 
 EDIT_KEYS = {Qt.Key.Key_C: "copy", Qt.Key.Key_X: "cut",
@@ -30,8 +31,8 @@ class Filmstrip(QAbstractScrollArea):
     _tiles_ready = Signal(object, object, bool)
     tile_width = 72
 
-    def __init__(self, tools, drop_media_preview):
-        super().__init__()
+    def __init__(self, tools, drop_media_preview, *, parent):
+        super().__init__(parent)
         self.tools, self.drop_media_preview = tools, drop_media_preview
         self.sources = {}
         self.track, self.total, self.current = [], 0, 1
@@ -54,6 +55,15 @@ class Filmstrip(QAbstractScrollArea):
         self.drop_position = self.drop_x = None
         self.drop_preview = None
         self.drop_key = None
+        self.external_gap = False
+        self.drop_badge = QLabel(parent)
+        self.drop_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.drop_badge.setStyleSheet("color:#0969DA; background:#E7F1FF; border:1px solid #BDD8FF;"
+                                      "border-radius:5px; padding:1px 5px; font-size:11px;")
+        self.drop_badge.hide()
+        self.drop_tooltip = QTimer(self, singleShot=True, interval=900)
+        self.drop_tooltip.timeout.connect(self._show_drop_tooltip)
+        self.drop_tooltip_visible = False
         self.drop_frames = 0
         self.drop_grip = 0.0
         self.drop_fraction = 0.0
@@ -125,7 +135,7 @@ class Filmstrip(QAbstractScrollArea):
     def _set_scroll_range(self):
         bar = self.horizontalScrollBar()
         bar.setPageStep(self._span())
-        extra = min(self.drop_frames, self._span()) if not self.compaction.count else 0
+        extra = self._stride() if self.external_gap else 0
         bar.setRange(0, max(0, self.total + extra - self._span()))
 
     def set_current(self, frame, *, playing=False):
@@ -255,13 +265,55 @@ class Filmstrip(QAbstractScrollArea):
                 return self.drop_position
         return position
 
-    def _drop_rect(self):
-        width = self._frame_width()
-        x = (self.drop_position - self.horizontalScrollBar().value()) * width
-        # At the end of a full viewport, retain a visible target while auto-scroll opens room.
-        x = min(self.viewport().width() - min(width * self._stride(), self.viewport().width()), max(0, x))
-        size = max(1, min(self.viewport().width() - x, self.drop_frames * width))
-        return QRect(round(x), 0, round(size), self.tile_height)
+    def _external_boundary_at(self, x):
+        # Hit-test the centers of the tiles currently drawn by the springs.
+        first = self.horizontalScrollBar().value()
+        step = self._stride()
+        for column in range(self._capacity()):
+            position = first + column * step
+            if position >= self.total:
+                return self.total
+            tile = self._tile_rect(column)
+            state = self.springs.states.get(position + 1)
+            offset = round(state.position) if state else 0
+            if x < tile.left() + tile.width() / 2 + offset:
+                return position
+        return min(self.total, first + self._span())
+
+    def _external_boundary_x(self):
+        first = self.horizontalScrollBar().value()
+        column = ceil((self.drop_position - first) / self._stride())
+        return self._tile_rect(column).left()
+
+    def _position_drop_badge(self):
+        position = self.drop_position
+        x = self._external_boundary_x()
+        after = position and (position == self.total or self.drop_x < x)
+        text = f"插入第 {position} 帧后" if after else f"插入第 {position + 1} 帧前"
+        label = self.drop_badge
+        if label.text() != text:
+            label.setText(text)
+            label.adjustSize()
+        parent = label.parentWidget()
+        origin = self.viewport().mapTo(parent, QPoint(x, 0))
+        label.move(max(0, min(origin.x() + 3, parent.width() - label.width())),
+                   max(0, origin.y() - label.height() - 2))
+        label.show()
+        label.raise_()
+
+    def _show_drop_tooltip(self):
+        if self.drop_key is not None:
+            name, _ = self.drop_preview
+            wrapped = "\n".join(name[i:i + 36] for i in range(0, len(name), 36))
+            point = self.viewport().mapToGlobal(QPoint(round(self.drop_x), self.tile_height + 4))
+            QToolTip.showText(point, wrapped, self.viewport())
+            self.drop_tooltip_visible = True
+
+    def _hide_drop_tooltip(self):
+        self.drop_tooltip.stop()
+        if self.drop_tooltip_visible:
+            QToolTip.hideText()
+            self.drop_tooltip_visible = False
 
     def _drag_frames(self):
         frames = set(self._visible_frames())
@@ -283,11 +335,17 @@ class Filmstrip(QAbstractScrollArea):
         if self.drop_x is None and not self.returning:
             return
         scale = self._frame_width()
+        gap = 0
         if self.drop_x is not None:
-            self.drop_position = self._boundary_at(self.drop_x)
-            anchor = self.drop_position * scale
-            self.springs.aim("anchor", anchor, anchor)
-        gap = self.drop_frames * scale if self.drop_x is not None else 0
+            if self.drop_key is not None:
+                self.drop_position = self._external_boundary_at(self.drop_x)
+                gap = self.viewport().width() / self._capacity()
+                self._position_drop_badge()
+            else:
+                self.drop_position = self._boundary_at(self.drop_x)
+                anchor = self.drop_position * scale
+                self.springs.aim("anchor", anchor, anchor)
+                gap = self.drop_frames * scale
         self.springs.aim("width", 0, gap)
         visible = self._drag_frames()
         keep = set(visible)
@@ -309,18 +367,23 @@ class Filmstrip(QAbstractScrollArea):
 
     def dragMoveEvent(self, event):
         key = queued_media_key(event.mimeData())
-        preview = self.drop_preview if key == self.drop_key else self.drop_media_preview(key)
+        same = key is not None and key == self.drop_key
+        preview = self.drop_preview if same else self.drop_media_preview(key)
         if preview:
-            if self.drop_key != key:
+            if not same:
                 if self.compaction.count:
                     self._clear_drop(animated=False)
                 self.returning = False
                 self.drop_key = key
                 self.drop_preview = preview
-                self.drop_frames = preview[2]
+                self.external_gap = True
                 self._set_scroll_range()
-            self.drop_x = event.position().x()
-            self._retarget_gap()
+            x = event.position().x()
+            if not same or x != self.drop_x:
+                self.drop_x = x
+                self._retarget_gap()
+                self._hide_drop_tooltip()
+                self.drop_tooltip.start()
             event.acceptProposedAction()
         else:
             self._clear_drop()
@@ -347,6 +410,8 @@ class Filmstrip(QAbstractScrollArea):
         active = self.drop_position is not None
         self.drop_position = self.drop_x = None
         self.drop_preview = self.drop_key = None
+        self.drop_badge.hide()
+        self._hide_drop_tooltip()
         self.move_point = None
         self.drop_fraction = self.drop_grip = 0
         if animated and active:
@@ -356,6 +421,7 @@ class Filmstrip(QAbstractScrollArea):
             self.springs.reset()
             self.returning = False
             self.drop_frames = 0
+            self.external_gap = False
             self.compaction = FrameCompaction(())
             self._set_scroll_range()
         self.viewport().update()
@@ -366,10 +432,12 @@ class Filmstrip(QAbstractScrollArea):
 
     def dropEvent(self, event):
         key = queued_media_key(event.mimeData())
+        valid = QRectF(self.viewport().rect()).contains(event.position()) and self.drop_media_preview(key)
         x = event.position().x()
-        position = self.drop_position if key == self.drop_key and self.drop_position is not None else self._boundary_at(x)
+        position = (self.drop_position if key == self.drop_key and x == self.drop_x
+                    else self._external_boundary_at(x))
         self._clear_drop()
-        if self.drop_media_preview(key):
+        if valid:
             self.setFocus(Qt.FocusReason.OtherFocusReason)
             self.media_dropped.emit(key, position)
             event.acceptProposedAction()
@@ -516,7 +584,10 @@ class Filmstrip(QAbstractScrollArea):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.viewport().rect(), QColor("#eaf1f9"))
         animated = self.drop_x is not None or self.returning
-        if self.drop_preview:
+        if self.drop_key is not None:
+            width = self.springs.states["width"].position
+            painter.fillRect(QRectF(self._external_boundary_x(), 0, width, self.tile_height), C.sunken)
+        elif self.drop_preview:
             self._paint_drop_preview(painter)
         thumb_height = max(1, self.tile_height - 22)
         step = self._stride()
@@ -574,6 +645,9 @@ class Filmstrip(QAbstractScrollArea):
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter, "等待读取视频帧")
         if self.move_point is not None:
             self._paint_floating_frame(painter)
+        if self.drop_key is not None:
+            x = min(self._external_boundary_x(), max(0, self.viewport().width() - 2))
+            painter.fillRect(x, 0, 2, self.tile_height, C.accent)
         painter.end()
 
     def _paint_drop_preview(self, painter):

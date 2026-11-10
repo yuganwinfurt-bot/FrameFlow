@@ -1436,6 +1436,60 @@ class WorkflowTest(unittest.TestCase):
         self.assertIs(editor.video, original)
         self.assertIs(editor.audio, original_audio)
 
+    def test_external_timeline_preview_keeps_one_tile_and_tracks_visible_boundaries(self):
+        short = self.root / "1.jpg"
+        long = self.root / ("很长的插入素材名称" * 8 + ".png")
+        Image.new("RGB", (64, 96), "blue").save(short)
+        Image.new("RGB", (64, 96), "red").save(long)
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1500, 800)
+        window.show()
+        window.add_paths([self.source, short, long])
+        self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
+        window.edit_button.click()
+        editor = window.pages.currentWidget()
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+                      "时间轴就绪")
+        strip = editor.filmstrip
+        viewport = strip.viewport()
+        editor._set_video_range(3, 8)
+        editor._update_range_marker()
+        track, selection = editor.video, editor.video_selection
+        keys = {job.path: key for key, job in window.jobs.items()}
+        widths = []
+
+        def hover(path, x, expected, *, after=False):
+            mime = QMimeData()
+            mime.setData(QUEUED_MEDIA, keys[path].encode("ascii"))
+            event = QDragEnterEvent(QPointF(x, 15), Qt.DropAction.CopyAction, mime,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            self.app.sendEvent(viewport, event)
+            self.assertTrue(event.isAccepted())
+            self.assertEqual(strip.drop_position, expected)
+            label = f"插入第 {expected} 帧后" if after else f"插入第 {expected + 1} 帧前"
+            self.assertEqual(strip.drop_badge.text(), label)
+            widths.append(strip.springs.states["width"].target)
+            QTest.qWait(100)
+            self.assertEqual(strip.drop_position, expected)
+            self.assertIs(editor.video, track)
+            self.assertEqual(editor.video_selection, selection)
+            self.app.sendEvent(viewport, QDragLeaveEvent())
+            self.assertTrue(strip.drop_badge.isHidden())
+            self.wait_for(lambda: not strip.springs.timer.isActive(), "空位平滑收回")
+
+        hover(short, 8, 0)
+        hover(long, strip._tile_rect(3).left(), 3)
+        hover(self.source, strip._tile_rect(6).left(), 6)
+        hover(short, strip._tile_rect(4).right() - 6, 5, after=True)
+        self.assertEqual(len(set(widths)), 1)
+        self.assertAlmostEqual(widths[0], viewport.width() / strip._capacity())
+        strip.horizontalScrollBar().setValue(9)
+        hover(short, strip._tile_rect(2).left(), 11)
+        strip.set_zoom(0)
+        last_column = (strip.total - 1 - strip.horizontalScrollBar().value()) // strip._stride()
+        hover(long, strip._tile_rect(last_column).right() - 2, strip.total, after=True)
+
     def test_drag_queued_media_onto_frame_boundary_or_audio_marker(self):
         image = self.root / "插入图片.png"
         Image.new("RGB", (64, 96), (240, 40, 80)).save(image)
@@ -1464,7 +1518,7 @@ class WorkflowTest(unittest.TestCase):
         modifier = Qt.KeyboardModifier.NoModifier
         copy = Qt.DropAction.CopyAction
 
-        def send_drop(path, target, point, *, expected=True, mime=None, boundary=None):
+        def send_drop(path, target, point, *, expected=True, mime=None, boundary=None, after=False):
             point = QPointF(point)
             if mime is None:
                 mime = QMimeData()
@@ -1480,16 +1534,18 @@ class WorkflowTest(unittest.TestCase):
                     self.assertEqual(strip.drop_position, boundary)
                     self.assertEqual(strip.drop_preview[0], path.name)
                     self.assertFalse(strip.drop_preview[1].isNull())
-                    slot = strip._drop_rect()
-                    self.assertGreater(slot.width(), 30)
-                    self.assertTrue(strip.viewport().rect().contains(slot))
-                    point = QPointF(slot.center())
+                    self.assertAlmostEqual(strip.springs.states["width"].target,
+                                           strip.viewport().width() / strip._capacity())
+                    label = f"插入第 {boundary} 帧后" if after else f"插入第 {boundary + 1} 帧前"
+                    self.assertEqual(strip.drop_badge.text(), label)
+                    self.assertTrue(strip.drop_badge.isVisible())
                 drop = QDropEvent(point, copy, mime, button, modifier)
                 self.app.sendEvent(target, drop)
                 self.assertTrue(drop.isAccepted())
                 if boundary is not None:
                     self.assertIsNone(strip.drop_position)
                     self.assertIsNone(strip.drop_preview)
+                    self.assertTrue(strip.drop_badge.isHidden())
 
         send_drop(audio, strip.viewport(), QPoint(20, 30), expected=False)
         item = window.preview_items[keys[image]]
@@ -1499,6 +1555,10 @@ class WorkflowTest(unittest.TestCase):
             def execute(_action):
                 self.assertIs(window.pages.currentWidget(), editor)
                 mime = drag.return_value.setMimeData.call_args.args[0]
+                pixmap = drag.return_value.setPixmap.call_args.args[0]
+                self.assertEqual(pixmap.deviceIndependentSize().toSize().toTuple(), (96, 32))
+                self.assertLess(pixmap.toImage().pixelColor(pixmap.width() // 2, 4).alpha(), 255)
+                self.assertEqual(drag.return_value.setHotSpot.call_args.args[0], QPoint(-14, -16))
                 send_drop(image, strip.viewport(), QPoint(strip._tile_rect(1).left() + 12, 30),
                           mime=mime, boundary=1)
                 return copy
@@ -1524,7 +1584,7 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(result.getpixel((10, 10)), (240, 40, 80))
 
         def drop_video():
-            send_drop(video, strip.viewport(), QPoint(strip._tile_rect(2).right() - 8, 30), boundary=3)
+            send_drop(video, strip.viewport(), QPoint(strip._tile_rect(2).right() - 8, 30), boundary=3, after=True)
 
         video_before, audio_before = editor.video, editor.audio
         prepared = editor._load_dropped_video(video, window.jobs[keys[video]].info, Processes())
