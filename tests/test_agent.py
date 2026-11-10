@@ -12,9 +12,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent
+from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QToolButton
 
 from frameflow.agent_api import PROBE_NAME
 from frameflow.agent_ui import AttachmentCard
@@ -103,6 +103,128 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.app.sendEvent(self.page, event)
         self.assertTrue(event.isAccepted())
         self.assertFalse(self.page.property("dragging"))
+
+    def test_top_navigation_fits_and_keeps_full_hit_areas(self):
+        window = self.window
+        nav = window.navigation
+
+        def check_tabs():
+            self.assertFalse(nav.usesScrollButtons())
+            self.assertFalse(any(button.isVisible() for button in nav.findChildren(QToolButton)))
+            self.assertEqual([nav.tabText(i) for i in range(nav.count())], ["格式转换", "媒体预览", "AI Agent"])
+            for index in range(nav.count()):
+                rect = nav.tabRect(index)
+                self.assertTrue(nav.rect().contains(rect))
+                self.assertGreaterEqual(rect.width(), nav.minimumTabSizeHint(index).width())
+                self.assertEqual(nav.tabAt(rect.center()), index)
+
+        for width, height in ((1177, 940), (942, 752), (940, 720)):
+            window.resize(width, height)
+            QTest.qWait(80)
+            check_tabs()
+
+        # Exercise the shrink path even when the main header has enough space for the preferred widths.
+        original_maximum = nav.maximumWidth()
+        nav.setMaximumWidth(nav.minimumSizeHint().width() + 12)
+        QTest.qWait(80)
+        check_tabs()
+        self.assertLess(nav.width(), nav.sizeHint().width())
+        for index in (1, 2, 0):
+            self.nav(index)
+            self.settle()
+            self.assertEqual(nav.currentIndex(), index)
+            check_tabs()
+        nav.setMaximumWidth(original_maximum)
+        for change_state in (window.showMaximized, window.showNormal):
+            change_state()
+            QTest.qWait(100)
+            check_tabs()
+
+    def test_hidden_scroll_bars_keep_wheel_keyboard_and_content_access(self):
+        keys = self.add_attachment_samples(14)
+        window, page = self.window, self.page
+        window.resize(940, 720)
+        QTest.qWait(80)
+
+        def check_scroll(area):
+            bar = area.verticalScrollBar()
+            self.wait(lambda: bar.maximum() > 0)
+            self.assertEqual(area.verticalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.assertFalse(bar.isVisible())
+            return bar
+
+        def wheel(area, angle, pixels=0):
+            viewport = area.viewport()
+            local = viewport.rect().center()
+            event = QWheelEvent(QPointF(local), QPointF(viewport.mapToGlobal(local)), QPoint(0, pixels),
+                                QPoint(0, angle), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                                Qt.ScrollPhase.ScrollUpdate if pixels else Qt.ScrollPhase.NoScrollPhase, False)
+            self.app.sendEvent(viewport, event)
+
+        for area in (window.list, window.inspector_scroll):
+            bar = check_scroll(area)
+            bar.setValue(0)
+            wheel(area, -120)
+            self.assertGreater(bar.value(), 0)
+
+        self.nav(1)
+        self.settle()
+        editor = window.editors[keys[0]]
+        settings = editor.settings_scroll
+        bar = check_scroll(settings)
+        bar.setValue(0)
+        for _ in range(30):
+            wheel(settings, -120)
+        self.assertEqual(bar.value(), bar.maximum())
+        field = editor.output_stem_edit
+        self.assertTrue(field.isVisibleTo(settings))
+        self.assertTrue(settings.viewport().rect().contains(field.mapTo(settings.viewport(), field.rect().center())))
+
+        self.nav(2)
+        self.settle()
+        rail_bar = check_scroll(window.preview_files)
+        rail_bar.setValue(0)
+        wheel(window.preview_files, -120)
+        self.assertGreater(rail_bar.value(), 0)
+
+        for index in range(25):
+            page.add_message(f"历史消息 {index} " * 16)
+        history_bar = check_scroll(page.history)
+        self.wait(lambda: history_bar.value() == history_bar.maximum())
+        wheel(page.history, 120)
+        self.assertLess(history_bar.value(), history_bar.maximum())
+        old_value = history_bar.value()
+        wheel(page.history, 0, 36)
+        self.assertLess(history_bar.value(), old_value)
+
+        page.input.setPlainText("a long draft\n" * 70)
+        edit_bar = check_scroll(page.input)
+        QTest.keyClick(page.input, Qt.Key.Key_Home, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(edit_bar.value(), 0)
+        wheel(page.input, -120)
+        self.assertGreater(edit_bar.value(), 0)
+        old_value = edit_bar.value()
+        wheel(page.input, 0, -36)
+        self.assertGreater(edit_bar.value(), old_value)
+        QTest.keyClick(page.input, Qt.Key.Key_End, Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(page.input.textCursor().position(), page.input.document().characterCount() - 1)
+        self.assertTrue(page.input.viewport().rect().contains(page.input.cursorRect().center()))
+
+        self.drop(keys, batch=True)
+        attachment_bar = check_scroll(page.pending_area)
+        wheel(page.pending_area, -120)
+        self.assertGreater(attachment_bar.value(), 0)
+        draft = page.input.toPlainText()
+        QTest.mouseClick(page.clear_attachments_button, Qt.MouseButton.LeftButton)
+        self.wait(lambda: page.pending_area.isHidden() and page.input.height() == page.input.maximumHeight())
+        self.assertEqual(page.input.toPlainText(), draft)
+        self.nav(0)
+        self.settle()
+        check_scroll(window.list)
+        self.nav(2)
+        self.settle()
+        check_scroll(page.history)
+        check_scroll(page.input)
 
     def add_attachment_samples(self, video_count, *, mixed=False):
         extra = []

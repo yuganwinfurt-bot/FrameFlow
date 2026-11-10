@@ -36,7 +36,7 @@ from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
 from .media import convert, filename_problem, media_path_missing, output_extension, probe, thumbnail
 from .details import DetailsDialog
 from .motion import (QUEUED_MEDIA, QUEUED_MEDIA_BATCH, Button, Combo, DirectoryButton, DropArea, Motion,
-                     NavigationBar, PageTransition, QualityRow, SpinBox, local_files)
+                     NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar, local_files)
 from .editor import Editor
 from .theme import STYLE, C, app_icon, brand_mark, chevron, shadow
 
@@ -589,6 +589,7 @@ class BatchFormatMenu(QFrame):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(scroll)
         scroll.setFixedHeight(min(392, 26 + sum(34 * len(items) + 34 for _, items in groups)))
         body = QWidget()
         inner = QVBoxLayout(body)
@@ -781,18 +782,18 @@ class MainWindow(QMainWindow):
         self.column_header.setObjectName("columnHeader")
         self.column_header.setFixedHeight(QUEUE_COLUMN_HEIGHT)
         self.column_header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.column_row = QHBoxLayout(self.column_header)
-        self.column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2], 0)
-        self.column_row.setSpacing(ROW_SPACING)
+        column_row = QHBoxLayout(self.column_header)
+        column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2], 0)
+        column_row.setSpacing(ROW_SPACING)
         gap = QWidget()
         gap.setFixedWidth(THUMB_SIZE.width())
-        self.column_row.addWidget(gap)
-        self.column_row.addWidget(column_title("名称"), 1)
+        column_row.addWidget(gap)
+        column_row.addWidget(column_title("名称"), 1)
         for text, width in (("时长", W_DURATION), ("大小", W_SIZE), ("状态", W_STATE),
                             ("输出格式", W_FORMAT), ("", W_REMOVE)):
             cell = column_title(text)
             cell.setFixedWidth(width)
-            self.column_row.addWidget(cell)
+            column_row.addWidget(cell)
         self.column_header.hide()
         queue_layout.addWidget(self.column_header)
 
@@ -808,9 +809,8 @@ class MainWindow(QMainWindow):
         self.list.setUniformItemSizes(True)
         self.list.setFrameShape(QFrame.Shape.NoFrame)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        hide_vertical_scroll_bar(self.list)
         self.list.currentItemChanged.connect(self._selection_changed)
-        self.list.verticalScrollBar().rangeChanged.connect(self._sync_column_header)
         self.remove_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.list)
         self.remove_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.remove_shortcut.activated.connect(self._remove_selected)
@@ -832,6 +832,7 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(scroll)
         scroll.setWidget(body)
         body.setMinimumWidth(1)
         scroll.viewport().setAutoFillBackground(False)
@@ -1135,10 +1136,14 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(header)
         row.setContentsMargins(28, 11, 28, 11)
         row.setSpacing(10)
+        brand = QWidget()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(10)
         mark = QLabel()
         mark.setPixmap(brand_mark(40))
         mark.setFixedSize(40, 40)
-        row.addWidget(mark)
+        brand_row.addWidget(mark)
         titles = QVBoxLayout()
         titles.setContentsMargins(0, 0, 0, 0)
         titles.setSpacing(0)
@@ -1148,8 +1153,9 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("caption")
         titles.addWidget(name)
         titles.addWidget(subtitle)
-        row.addLayout(titles)
-        row.setStretch(1, 1)
+        brand_row.addLayout(titles)
+        brand_row.addStretch()
+        row.addWidget(brand, 1)
         self.navigation = NavigationBar()
         self.navigation.addTab("格式转换")
         self.navigation.addTab("媒体预览")
@@ -1166,14 +1172,8 @@ class MainWindow(QMainWindow):
         status_line.setContentsMargins(0, 0, 0, 0)
         status_line.addStretch()
         status_line.addWidget(self.tool_chip)
-        status_holder.setMinimumWidth(236)
         row.addWidget(status_holder, 1)
         return header
-
-    def _sync_column_header(self, *_args) -> None:
-        bar = self.list.verticalScrollBar()
-        extra = (bar.width() or bar.sizeHint().width()) if bar.maximum() > 0 else 0
-        self.column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2] + extra, 0)
 
     def _toggle_details(self) -> None:
         self._show_details()
@@ -1294,7 +1294,7 @@ class MainWindow(QMainWindow):
         self.preview_files.setIconSize(THUMB_SIZE)
         self.preview_files.setFrameShape(QFrame.Shape.NoFrame)
         self.preview_files.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.preview_files.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        hide_vertical_scroll_bar(self.preview_files)
         self.preview_files.currentItemChanged.connect(self._preview_file_changed)
         rail.addWidget(self.preview_files, 1)
 
@@ -1335,6 +1335,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dialog)
         choices = QListWidget()
         choices.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        hide_vertical_scroll_bar(choices)
         for key, job in self.jobs.items():
             item = QListWidgetItem(QIcon(queue_thumbnail(job)), job.path.name, choices)
             item.setData(Qt.ItemDataRole.UserRole, key)
@@ -1627,7 +1628,6 @@ class MainWindow(QMainWindow):
         self.drop_area.setVisible(not has_files)
         self.drop_area.set_compact(has_files)
         self.drop_area.setEnabled(not busy and self.tools is not None)
-        self._sync_column_header()
         for key, row in self.rows.items():
             row.remove_button.setEnabled(not busy)
             queued = self.jobs[key].queued

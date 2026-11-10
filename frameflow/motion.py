@@ -1,10 +1,10 @@
 """自绘控件与转场动画。颜色统一从 theme 取，避免和样式表走样。"""
 
 
-from PySide6.QtCore import (QAbstractAnimation, QEvent, QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
+from PySide6.QtCore import (QAbstractAnimation, QEvent, QEasingCurve, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
                             QVariantAnimation)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QComboBox, QStyle, QStyleOptionSlider, QHBoxLayout, QLabel, QListView, QLineEdit, QPushButton, QSizePolicy, QSlider,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QStyle, QStyleOptionSlider, QHBoxLayout, QLabel, QListView, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QSlider,
                                QSpinBox, QStyle, QStyleOptionButton, QStyleOptionSpinBox, QStyleOptionViewItem, QTabBar,
                                QStyledItemDelegate, QLayout, QVBoxLayout, QWidget)
 
@@ -46,12 +46,52 @@ def _mix(start: QColor, end: QColor, amount: float) -> QColor:
     return QColor.fromRgbF(*(a + (b - a) * amount for a, b in zip(start.getRgbF(), end.getRgbF())))
 
 
+class _PixelScroll(QObject):
+    def __init__(self, area):
+        super().__init__(area)
+        self.remainder = 0
+
+    def eventFilter(self, viewport, event):
+        if (event.type() != QEvent.Type.Wheel or not event.angleDelta().isNull()
+                or event.modifiers() != Qt.KeyboardModifier.NoModifier):
+            return False
+        delta = event.pixelDelta()
+        if abs(delta.y()) <= abs(delta.x()):
+            return False
+        area = self.parent()
+        bar = area.verticalScrollBar()
+        value = bar.value()
+        if value == (bar.minimum() if delta.y() > 0 else bar.maximum()):
+            self.remainder = 0
+            return False
+        step = max(1, area.fontMetrics().lineSpacing()) if isinstance(area, QPlainTextEdit) else 1
+        distance = self.remainder + delta.y()
+        units = int(distance / step)
+        self.remainder = distance - units * step
+        bar.setValue(value - units)
+        event.accept()
+        return True
+
+
+def hide_vertical_scroll_bar(area):
+    area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    if isinstance(area, QAbstractItemView):
+        area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    # Qt already routes angle-based wheel events and keyboard navigation to the hidden bar.
+    area.viewport().installEventFilter(_PixelScroll(area))
+
+
 class NavigationBar(QTabBar):
     """带蓝色滑动指示线的导航。"""
+
+    ICON_SIZE = 18
+    ICON_GAP = 6
+    FONT_SIZE = 15
 
     def __init__(self):
         super().__init__()
         self.setExpanding(False)
+        self.setUsesScrollButtons(False)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setDrawBase(False)
         self.position = 0.0
@@ -61,7 +101,14 @@ class NavigationBar(QTabBar):
         self.update()
 
     def tabSizeHint(self, index):
-        return QSize(142, 43)
+        return self.minimumTabSizeHint(index).expandedTo(QSize(142, 43))
+
+    def minimumTabSizeHint(self, index):
+        font = QFont(self.font())
+        font.setPixelSize(self.FONT_SIZE)
+        font.setWeight(QFont.Weight.DemiBold)
+        text_width = QFontMetrics(font).horizontalAdvance(self.tabText(index))
+        return QSize(text_width + self.ICON_SIZE + self.ICON_GAP + 20, 43)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -70,9 +117,12 @@ class NavigationBar(QTabBar):
         painter.setBrush(C.sunken)
         radius = RADIUS - 2
         painter.drawRoundedRect(QRectF(self.rect()).adjusted(0, 0, -0.5, -0.5), radius, radius)
-        left = self.tabRect(0)
-        right = self.tabRect(1)
-        active = QRectF(left).translated((right.left() - left.left()) * self.position, 0)
+        index = min(int(self.position), self.count() - 1)
+        start = self.tabRect(index)
+        end = self.tabRect(min(index + 1, self.count() - 1))
+        fraction = self.position - index
+        active = QRectF(start).translated((end.left() - start.left()) * fraction, 0)
+        active.setWidth(start.width() + (end.width() - start.width()) * fraction)
         active = active.adjusted(2, 2, -2, -2)
         painter.setBrush(C.accent_soft)
         painter.setPen(QPen(C.border, 1))
@@ -83,7 +133,7 @@ class NavigationBar(QTabBar):
                                        active.width() - 10, 2.5), 1.25, 1.25)
 
         font = QFont(self.font())
-        font.setPixelSize(15)
+        font.setPixelSize(self.FONT_SIZE)
         for index in range(self.count()):
             rect = self.tabRect(index)
             inside = active.contains(QRectF(rect).center())
@@ -92,11 +142,12 @@ class NavigationBar(QTabBar):
             ink = C.accent if inside else C.text
             title = self.tabText(index)
             width = painter.fontMetrics().horizontalAdvance(title)
-            left = rect.center().x() - (width + 24) // 2
-            painter.drawPixmap(left, rect.center().y() - 9,
-                               line_pixmap(("gear", "video", "robot")[index], 18, ink.name(), 1.9))
+            icon_space = self.ICON_SIZE + self.ICON_GAP
+            left = rect.center().x() - (width + icon_space) // 2
+            painter.drawPixmap(left, rect.center().y() - self.ICON_SIZE // 2,
+                               line_pixmap(("gear", "video", "robot")[index], self.ICON_SIZE, ink.name(), 1.9))
             painter.setPen(ink)
-            painter.drawText(rect.adjusted(left - rect.left() + 24, 0, 0, 0),
+            painter.drawText(rect.adjusted(left - rect.left() + icon_space, 0, 0, 0),
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush)

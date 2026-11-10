@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .media import AudioInfo, ImageInfo, MediaInfo, VideoInfo, detail_rows
-from .motion import Button
+from .motion import Button, hide_vertical_scroll_bar
 from .theme import C
 
 LABEL_WIDTH = 78
@@ -300,6 +300,7 @@ class DetailsView(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self.scroll)
         self.scroll.setWidget(self.body)
         self.scroll.viewport().setAutoFillBackground(False)
         outer.addWidget(self.scroll, 1)

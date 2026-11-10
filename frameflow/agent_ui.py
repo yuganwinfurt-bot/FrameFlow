@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from .icons import icon
-from .motion import Button, QUEUED_MEDIA, QUEUED_MEDIA_BATCH, queued_media_key
+from .motion import Button, QUEUED_MEDIA, QUEUED_MEDIA_BATCH, hide_vertical_scroll_bar, queued_media_key
 from .theme import C
 
 CHAT_WIDTH = 880
@@ -128,6 +128,7 @@ class PendingAttachments(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.body = QWidget()
         self.body.setObjectName("agentPendingBody")
@@ -174,7 +175,7 @@ class PendingAttachments(QScrollArea):
         return hint
 
     def _reflow(self, *, force=False):
-        # Leave room for the scroll bar even before it appears, so wrapping is stable.
+        # Keep the existing card gutter and wrapping thresholds with the scroll bar hidden.
         width = self.contentsRect().width() - self.verticalScrollBar().sizeHint().width()
         columns = self._columns_at(width)
         count = len(self.cards)
@@ -279,6 +280,7 @@ class Composer(QTextEdit):
         self.setAcceptDrops(False)
         self.viewport().setAcceptDrops(False)
         self.setTabChangesFocus(True)
+        hide_vertical_scroll_bar(self)
         self.setPlaceholderText("输入消息，或从左侧队列拖入媒体…")
         self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.document().documentLayout().documentSizeChanged.connect(self._fit_document)
@@ -406,6 +408,7 @@ class AgentPage(QFrame):
         self.history.setObjectName("agentHistory")
         self.history.setWidgetResizable(True)
         self.history.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self.history)
         body = QWidget()
         body.setObjectName("agentHistoryBody")
         center = QHBoxLayout(body)
@@ -755,6 +758,7 @@ class PlanCard(QFrame):
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self.scroll)
         self.scroll.setWidget(body)
         outer.addWidget(self.scroll)
         buttons = QHBoxLayout()

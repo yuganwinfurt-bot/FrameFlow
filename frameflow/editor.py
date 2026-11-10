@@ -33,7 +33,7 @@ from .media import (AUDIO_EXTENSIONS, HARDWARE_BACKENDS, VIDEO_FRAME_RATES, VIDE
 from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _save_image, estimate_image_size,
                     media_path_missing, probe, thumbnail)
 from .motion import (Button, ClickSlider, Combo, DirectoryButton, DirectoryPathEdit, Motion, QualityRow, SpinBox,
-                     queued_media_key)
+                     hide_vertical_scroll_bar, queued_media_key)
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
 
@@ -359,6 +359,7 @@ class RunStatus(QPlainTextEdit):
         self.setTabChangesFocus(True)
         self.setPlaceholderText("等待操作")
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self)
         self.setMinimumHeight(42)
 
     def sizeHint(self):
@@ -1376,6 +1377,7 @@ class Editor(QDialog):
             self.audio_list.setObjectName("audioClips")
             self.audio_list.setToolTip("组成当前音轨的片段")
             self.audio_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            hide_vertical_scroll_bar(self.audio_list)
             layout.addWidget(self.audio_list)
         if isinstance(self.info, (VideoInfo, ImageInfo)):
             self.image_page, layout = self._page("图片", "image")
@@ -1423,6 +1425,7 @@ class Editor(QDialog):
         side_scroll.setWidgetResizable(True)
         side_scroll.setFrameShape(QFrame.Shape.NoFrame)
         side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(side_scroll)
         side_scroll.setWidget(body)
         body.setMinimumWidth(1)
         side_scroll.viewport().setAutoFillBackground(False)
