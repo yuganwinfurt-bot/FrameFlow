@@ -10,12 +10,14 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PIL import Image
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from frameflow.agent_api import PROBE_NAME
+from frameflow.agent_ui import AttachmentCard
 from frameflow.media import Processes, Tools, probe
 from frameflow.motion import QUEUED_MEDIA, QUEUED_MEDIA_BATCH
 from frameflow.window import MainWindow
@@ -101,6 +103,147 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.app.sendEvent(self.page, event)
         self.assertTrue(event.isAccepted())
         self.assertFalse(self.page.property("dragging"))
+
+    def add_attachment_samples(self, video_count, *, mixed=False):
+        extra = []
+        for index in range(video_count):
+            path = self.root / f"一段文件名称很长的演示视频-{index:02d}.mp4"
+            path.write_bytes(self.first.read_bytes())
+            extra.append(path)
+        if mixed:
+            image = self.root / "竖屏图片.png"
+            Image.new("RGB", (120, 200), "#277ad9").save(image)
+            audio = self.root / "音频波形.wav"
+            Processes().run([self.tools.ffmpeg, "-v", "error", "-f", "lavfi",
+                             "-i", "sine=frequency=440", "-t", "1", str(audio)])
+            extra.extend((image, audio))
+        self.window.add_paths(extra)
+        self.wait(lambda: len(self.window.jobs) == len(self.keys) + len(extra)
+                  and all(job.info and job.picture for job in self.window.jobs.values()))
+        return tuple(self.window.jobs)
+
+    def test_pending_cards_wrap_and_removal_preserves_editor_geometry(self):
+        keys = self.add_attachment_samples(4, mixed=True)
+        self.nav(2)
+        self.settle()
+        page = self.page
+        area = page.pending_area
+        editor = page.input
+        QTest.keyClicks(editor, "first line")
+        QTest.keyClick(editor, Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier)
+        QTest.keyClicks(editor, "second line")
+        QTest.keyClick(editor, Qt.Key.Key_Return, Qt.KeyboardModifier.ShiftModifier)
+        QTest.keyClicks(editor, "third line")
+        self.wait(lambda: editor.height() > editor.minimumHeight())
+        draft, text_height = editor.toPlainText(), editor.height()
+        self.assertFalse(area.isVisible())
+        empty_height = page.composer_panel.height()
+        self.assertGreaterEqual(text_height, 42)
+        cursor = editor.textCursor()
+        cursor.setPosition(5)
+        editor.setTextCursor(cursor)
+
+        self.drop(keys[:1])
+        self.wait(lambda: area.cards[keys[0]].isVisible())
+        single_height = area.height()
+        self.assertEqual(editor.height(), text_height)
+        self.drop(keys[:2], batch=True)
+        self.wait(lambda: area.cards[keys[1]].x() > area.cards[keys[0]].x())
+        self.assertEqual(area.cards[keys[0]].y(), area.cards[keys[1]].y())
+        self.assertEqual(area.height(), single_height)
+        self.assertLess(area.cards[keys[0]].width(), area.width() // 2)
+
+        self.drop(keys, batch=True)
+        self.wait(lambda: area.height() > single_height and area.cards[keys[-1]].isVisible())
+        self.assertGreater(area.cards[keys[-1]].y(), area.cards[keys[0]].y())
+        self.assertIn("…", area.cards[keys[2]].name.text())
+        portrait = area.cards[keys[-2]].thumbnail.pixmap()
+        self.assertLess(portrait.width(), portrait.height())
+        waveform = area.cards[keys[-1]].thumbnail.pixmap()
+        self.assertGreater(waveform.width(), waveform.height())
+        self.capture("attachment-wrap.png")
+
+        retained = area.cards[keys[-1]]
+        for key in (keys[2], keys[0]):
+            QTest.mouseClick(area.cards[key].remove_button, Qt.MouseButton.LeftButton)
+            self.wait(lambda: key not in area.cards)
+            self.assertIs(area.cards[keys[-1]], retained)
+            self.assertEqual(editor.height(), text_height)
+            self.assertEqual(editor.toPlainText(), draft)
+            self.assertEqual(editor.textCursor().position(), 5)
+        self.capture("attachment-after-remove.png")
+
+        self.window.resize(940, 720)
+        self.wait(lambda: self.window.width() == 940)
+        self.assertGreater(retained.y(), area.cards[keys[1]].y())
+        for key in page.pending:
+            QTest.mouseClick(area.cards[key].remove_button, Qt.MouseButton.LeftButton)
+        self.wait(lambda: not area.isVisible() and page.composer_panel.height() == empty_height)
+        self.assertEqual(editor.height(), text_height)
+        self.assertEqual(editor.toPlainText(), draft)
+        self.assertEqual(editor.textCursor().position(), 5)
+        self.assertTrue(all(job.path.is_file() for job in self.window.jobs.values()))
+        QTest.keyClicks(editor, "!")
+        self.assertEqual(editor.toPlainText(), draft[:5] + "!" + draft[5:])
+        geometry = (area.height(), editor.height(), page.composer_panel.height())
+        self.nav(1)
+        self.settle()
+        self.nav(2)
+        self.settle()
+        self.assertEqual((area.height(), editor.height(), page.composer_panel.height()), geometry)
+
+    def test_pending_scroll_bulk_removal_and_readding_after_send(self):
+        keys = self.add_attachment_samples(11)
+        self.nav(2)
+        self.settle()
+        self.window.resize(940, 720)
+        page, area = self.page, self.page.pending_area
+        page.input.setPlainText("draft\n" * 12)
+        self.wait(lambda: page.input.height() == page.input.maximumHeight())
+        self.drop(keys, batch=True)
+        bar = area.verticalScrollBar()
+        self.wait(lambda: bar.maximum() > 0)
+        cap = area.height()
+        self.assertLess(cap, area.body.height())
+        self.assertGreaterEqual(page.input.height(), page.input.fontMetrics().lineSpacing() * 4 + 10)
+        self.assertGreater(page.input.y(), area.geometry().bottom())
+        self.assertLess(page.input.geometry().bottom(), page.send_button.mapTo(page.composer_panel, QPoint()).y())
+        self.capture("attachment-scroll-narrow.png")
+        bar.setValue(bar.maximum())
+        self.wait(lambda: area.cards[keys[-1]].mapTo(area.viewport(), QPoint(0, 0)).y() >= 0)
+        QTest.mouseClick(area.cards[keys[-1]].remove_button, Qt.MouseButton.LeftButton)
+        self.assertNotIn(keys[-1], page.pending)
+
+        for maximized in (True, False):
+            if maximized:
+                self.window.showMaximized()
+            else:
+                self.window.showNormal()
+            self.wait(lambda: self.window.isMaximized() == maximized)
+            # Windows can report the new state before the native resize and button layout arrive.
+            QTest.qWait(80)
+            QTest.mouseClick(page.clear_attachments_button, Qt.MouseButton.LeftButton)
+            self.wait(lambda: not area.isVisible() and area.height() == 0)
+            self.assertEqual(page.input.toPlainText(), "draft\n" * 12)
+            self.assertEqual(page.input.height(), page.input.maximumHeight())
+            self.drop(keys[:2], batch=True)
+            self.wait(lambda: area.isVisible())
+            self.assertEqual(bar.value(), 0)
+            self.assertLess(area.height(), cap)
+
+        page.submitted.disconnect(self.window.agent_session.submit)
+        page.before_submit = lambda: True
+        sent = []
+        page.submitted.connect(lambda text, items: sent.append((text, tuple(item.key for item in items))))
+        QTest.mouseClick(page.send_button, Qt.MouseButton.LeftButton)
+        self.wait(lambda: not area.isVisible() and bool(sent))
+        self.assertEqual(sent, [("draft\n" * 11 + "draft", keys[:2])])
+        self.assertEqual(len(page.bubbles[-1].findChildren(AttachmentCard)), 2)
+        self.assertEqual(page.input.toPlainText(), "")
+        self.drop(keys[2:3])
+        self.wait(lambda: area.isVisible() and page.pending == keys[2:3])
+        self.assertEqual(tuple(area.cards), keys[2:3])
+        self.assertEqual(bar.value(), 0)
 
     def test_agent_transition_preserves_queue_and_preview(self):
         window = self.window

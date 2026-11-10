@@ -1325,7 +1325,7 @@ class MainWindow(QMainWindow):
     def _agent_attachment(self, key):
         job = self.jobs.get(key)
         if job and not media_path_missing(job.path):
-            return Attachment(key, job.path.name, rail_meta(job), queue_thumbnail(job))
+            return Attachment(key, job.path.name, rail_meta(job), queue_thumbnail(job), preview=job.picture)
         return None
 
     def _choose_agent_attachments(self):
