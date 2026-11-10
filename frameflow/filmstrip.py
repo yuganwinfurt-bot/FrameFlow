@@ -1,11 +1,12 @@
 """按可视范围加载的逐帧缩略图条。"""
 
+import sys
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from math import ceil, floor
 
 from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QLabel, QToolTip
 
 from .editing import THUMB_HEIGHT, THUMB_WIDTH, frame_tiles, length, slice_track
@@ -13,6 +14,9 @@ from .media import Cancelled, MediaError, Processes
 from .motion import queued_media_key
 from .spring import FrameCompaction, SpringClock, edge_speed
 from .theme import C
+
+if sys.platform == "win32":
+    from .drag_wheel import DragWheel
 
 
 EDIT_KEYS = {Qt.Key.Key_C: "copy", Qt.Key.Key_X: "cut",
@@ -67,6 +71,8 @@ class Filmstrip(QAbstractScrollArea):
         self.drop_frames = 0
         self.drop_grip = 0.0
         self.drop_fraction = 0.0
+        self.drop_wheel_fraction = 0.0
+        self.drag_wheel = DragWheel(self, self._native_drop_wheel) if sys.platform == "win32" else None
         self.returning = False
         self.compaction = FrameCompaction(())
         self.move_press = None
@@ -140,12 +146,13 @@ class Filmstrip(QAbstractScrollArea):
 
     def set_current(self, frame, *, playing=False):
         self.current = frame
-        bar = self.horizontalScrollBar()
-        position, first = frame - 1, bar.value()
-        if position < first:
-            bar.setValue(position)
-        elif position >= first + self._span():
-            bar.setValue(position if playing else position - self._span() + 1)
+        if not playing or self.drop_key is None:
+            bar = self.horizontalScrollBar()
+            position, first = frame - 1, bar.value()
+            if position < first:
+                bar.setValue(position)
+            elif position >= first + self._span():
+                bar.setValue(position if playing else position - self._span() + 1)
         self.viewport().update()
         if not self.closing and not playing:
             self.timer.start()
@@ -378,6 +385,8 @@ class Filmstrip(QAbstractScrollArea):
                 self.drop_preview = preview
                 self.external_gap = True
                 self._set_scroll_range()
+                if self.drag_wheel:
+                    self.drag_wheel.start()
             x = event.position().x()
             if not same or x != self.drop_x:
                 self.drop_x = x
@@ -391,7 +400,9 @@ class Filmstrip(QAbstractScrollArea):
 
     def _animate_gap(self, dt, moving):
         bar = self.horizontalScrollBar()
-        speed = edge_speed(self.drop_x, self.viewport().width(), band=20) if self.drop_x is not None else 0
+        band, maximum = (42, 1080) if self.drop_key is not None else (20, 430)
+        speed = edge_speed(self.drop_x, self.viewport().width(), band=band,
+                           maximum=maximum) if self.drop_x is not None else 0
         scrolling = (speed < 0 and bar.value() > bar.minimum()) or (speed > 0 and bar.value() < bar.maximum())
         if scrolling:
             self.drop_fraction += speed * dt / self._frame_width()
@@ -412,6 +423,9 @@ class Filmstrip(QAbstractScrollArea):
         self.drop_preview = self.drop_key = None
         self.drop_badge.hide()
         self._hide_drop_tooltip()
+        if self.drag_wheel:
+            self.drag_wheel.stop()
+        self.drop_wheel_fraction = 0.0
         self.move_point = None
         self.drop_fraction = self.drop_grip = 0
         if animated and active:
@@ -567,7 +581,30 @@ class Filmstrip(QAbstractScrollArea):
         else:
             super().keyPressEvent(event)
 
+    def _scroll_drop_frames(self, frames):
+        if self.drop_key is not None:
+            self.drop_wheel_fraction += frames
+            steps = int(self.drop_wheel_fraction)
+            if steps:
+                self.drop_wheel_fraction -= steps
+                bar = self.horizontalScrollBar()
+                bar.setValue(bar.value() + steps)
+
+    def _native_drop_wheel(self, delta):
+        if self.viewport().rect().contains(self.viewport().mapFromGlobal(QCursor.pos())):
+            self._scroll_drop_frames(delta * 3 * self._stride() / 120)
+
     def wheelEvent(self, event):
+        if self.drop_key is not None:
+            # On Windows the thread listener already observes spontaneous mouse messages.
+            if not (self.drag_wheel and self.drag_wheel.handle and event.spontaneous()):
+                angle, pixel = event.angleDelta(), event.pixelDelta()
+                if not angle.isNull():
+                    self._scroll_drop_frames((angle.x() or -angle.y()) * 3 * self._stride() / 120)
+                elif not pixel.isNull():
+                    self._scroll_drop_frames((pixel.x() or -pixel.y()) / self._frame_width())
+            event.accept()
+            return
         delta = event.angleDelta().x() or event.angleDelta().y()
         if delta:
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:

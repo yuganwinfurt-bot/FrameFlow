@@ -1490,6 +1490,79 @@ class WorkflowTest(unittest.TestCase):
         last_column = (strip.total - 1 - strip.horizontalScrollBar().value()) // strip._stride()
         hover(long, strip._tile_rect(last_column).right() - 2, strip.total, after=True)
 
+    def test_external_timeline_scroll_updates_the_drop_without_moving_the_pointer(self):
+        image = self.root / "拖入.jpg"
+        Image.new("RGB", (48, 48), "blue").save(image)
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1300, 780)
+        window.show()
+        window.add_paths([self.source, image])
+        self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
+        window.edit_button.click()
+        editor = window.pages.currentWidget()
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+                      "时间轴就绪")
+        strip = editor.filmstrip
+        viewport = strip.viewport()
+        bar = strip.horizontalScrollBar()
+        bar.setValue(16)
+        original = editor.video
+        point = QPoint(strip._tile_rect(3).left() + 8, 20)
+        mime = QMimeData()
+        mime.setData(QUEUED_MEDIA, next(key for key, job in window.jobs.items() if job.path == image).encode("ascii"))
+        action = Qt.DropAction.CopyAction
+        button = Qt.MouseButton.LeftButton
+        modifier = Qt.KeyboardModifier.NoModifier
+        enter = QDragEnterEvent(QPointF(point), action, mime, button, modifier)
+        self.app.sendEvent(viewport, enter)
+        self.assertTrue(enter.isAccepted())
+        self.assertEqual(strip.drop_position, 19)
+
+        def wheel(delta):
+            event = QWheelEvent(QPointF(point), QPointF(viewport.mapToGlobal(point)), QPoint(), QPoint(0, delta),
+                                button, Qt.KeyboardModifier.ControlModifier, Qt.ScrollPhase.NoScrollPhase, False)
+            self.app.sendEvent(viewport, event)
+            self.assertTrue(event.isAccepted())
+
+        wheel(-120)
+        self.assertEqual((bar.value(), strip.drop_position), (19, 22))
+        self.assertEqual(strip.drop_badge.text(), "插入第 23 帧前")
+        self.assertEqual(strip.zoom, 4)
+        strip.set_current(1, playing=True)
+        self.assertEqual((bar.value(), strip.drop_position), (19, 22))
+        wheel(120)
+        self.assertEqual((bar.value(), strip.drop_position), (16, 19))
+        wheel(-20)
+        self.assertEqual(bar.value(), 16)
+        wheel(-20)
+        self.assertEqual((bar.value(), strip.drop_position), (17, 20))
+        self.assertIs(editor.video, original)
+        drop = QDropEvent(QPointF(point), action, mime, button, modifier)
+        self.app.sendEvent(viewport, drop)
+        self.assertTrue(drop.isAccepted())
+        self.wait_for(lambda: editor.scope is None and image in editor.imported_images, "图片插入")
+        self.assertEqual(editor._frame_ref(21)[0], editor.imported_images[image])
+        editor.undo()
+        self.assertIs(editor.video, original)
+
+        def drag_at(x):
+            self.app.sendEvent(viewport, QDragMoveEvent(QPointF(x, 20), action, mime, button, modifier))
+
+        bar.setValue(16)
+        self.app.sendEvent(viewport, QDragEnterEvent(QPointF(point), action, mime, button, modifier))
+        drag_at(viewport.width() - 34)
+        self.wait_for(lambda: bar.value() > 16, "进入右边缘后自动向右滚动")
+        drag_at(point.x())
+        offset = bar.value()
+        QTest.qWait(180)
+        self.assertEqual(bar.value(), offset)
+        drag_at(34)
+        self.wait_for(lambda: bar.value() < offset, "进入左边缘后自动向左滚动")
+        self.app.sendEvent(viewport, QDragLeaveEvent())
+        self.assertTrue(strip.drop_badge.isHidden())
+        self.assertIs(editor.video, original)
+
     def test_drag_queued_media_onto_frame_boundary_or_audio_marker(self):
         image = self.root / "插入图片.png"
         Image.new("RGB", (64, 96), (240, 40, 80)).save(image)
