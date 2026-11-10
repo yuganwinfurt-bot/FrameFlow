@@ -36,7 +36,8 @@ from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
 from .media import convert, filename_problem, media_path_missing, output_extension, probe, thumbnail
 from .details import DetailsDialog
 from .motion import (QUEUED_MEDIA, QUEUED_MEDIA_BATCH, Button, Combo, DirectoryButton, DropArea, Motion,
-                     NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar, local_files)
+                     NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar,
+                     install_parameter_wheel_policy, local_files)
 from .editor import Editor
 from .theme import STYLE, C, app_icon, brand_mark, chevron, shadow
 
@@ -673,6 +674,7 @@ class RenameDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, tools: Tools | None, tool_error: str = "") -> None:
         super().__init__()
+        install_parameter_wheel_policy()
         self.tools = tools
         self.closing = False
         self.jobs: dict[str, Job] = {}

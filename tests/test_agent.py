@@ -14,9 +14,10 @@ from PIL import Image
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QInputDialog, QSpinBox, QToolButton
 
 from frameflow.agent_api import PROBE_NAME
+from frameflow.agent_settings_ui import ModelDialog
 from frameflow.agent_ui import AttachmentCard
 from frameflow.media import Processes, Tools, probe
 from frameflow.motion import QUEUED_MEDIA, QUEUED_MEDIA_BATCH
@@ -225,6 +226,113 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.settle()
         check_scroll(page.history)
         check_scroll(page.input)
+
+    def send_parameter_wheel(self, widget, *, angle=0, pixels=0):
+        point = widget.rect().center()
+        event = QWheelEvent(QPointF(point), QPointF(widget.mapToGlobal(point)), QPoint(0, pixels),
+                            QPoint(0, angle), Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                            Qt.ScrollPhase.ScrollUpdate if pixels else Qt.ScrollPhase.NoScrollPhase, False)
+        self.app.sendEvent(widget, event)
+
+    def test_wheel_over_parameters_scrolls_both_output_panels(self):
+        path = self.root / "带音轨.mp4"
+        Processes().run([self.tools.ffmpeg, "-v", "error", "-i", str(self.first), "-f", "lavfi",
+                         "-i", "sine=frequency=440", "-c:v", "copy", "-c:a", "aac", "-shortest", str(path)])
+        window = self.window
+        window.add_paths([path])
+        key = next(key for key, job in window.jobs.items() if job.path == path)
+        self.wait(lambda: window.jobs[key].info and window.jobs[key].picture)
+        window.list.setCurrentItem(window.items[key])
+        window.resize(940, 720)
+        self.wait(lambda: key in window.editors)
+        editor = window.editors[key]
+
+        def check_control(area, control, receiver=None):
+            self.assertTrue(control.isVisibleTo(area))
+            self.assertTrue(control.isEnabled())
+            bar = area.verticalScrollBar()
+            self.wait(lambda: bar.maximum() > 0)
+            self.assertFalse(bar.isVisible())
+            value = control.currentIndex if isinstance(control, QComboBox) else control.value
+            control.setFocus()
+            area.ensureWidgetVisible(control)
+            original = value()
+            for use_pixels in (False, True):
+                before = bar.value()
+                direction = -1 if before < bar.maximum() else 1
+                wheel = {"pixels": 32 * direction} if use_pixels else {"angle": 120 * direction}
+                self.send_parameter_wheel(receiver or control, **wheel)
+                self.assertEqual(value(), original)
+                self.assertGreater((before - bar.value()) * direction, 0)
+
+        controls = (editor.preset, editor.container, editor.codec, editor.acceleration,
+                    editor.export_edge, editor.output_fps, editor.audio_bitrate, editor.quality.slider)
+        for page in (0, 1, 2, 0):
+            self.nav(page)
+            self.settle()
+            if page == 2:
+                continue
+            area = editor.settings_scroll if page == 1 else window.inspector_scroll
+            for control in controls:
+                with self.subTest(page=page, control=control.toolTip()):
+                    check_control(area, control)
+            field = editor.output_stem_edit
+            self.assertTrue(area.isAncestorOf(field) and field.isVisible())
+            area.ensureWidgetVisible(field)
+            self.assertTrue(area.viewport().rect().contains(field.mapTo(area.viewport(), field.rect().center())))
+            self.assertTrue((window.preview_start if page == 1 else window.start_button).isVisible())
+
+        # Exercise an inline numeric editor, whose wheel initially arrives at its QLineEdit child.
+        double = QDoubleSpinBox()
+        editor.settings_body.layout().addWidget(double)
+        double.setValue(12.5)
+        self.wait(double.isVisible)
+        check_control(window.inspector_scroll, double, double.lineEdit())
+        QTest.keyClick(double, Qt.Key.Key_Up)
+        self.assertGreater(double.value(), 12.5)
+
+        fps = editor.output_fps.currentIndex()
+        QTest.keyClick(editor.output_fps, Qt.Key.Key_Down)
+        self.assertGreater(editor.output_fps.currentIndex(), fps)
+        slider = editor.quality.slider
+        quality = slider.value()
+        QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() - 15, slider.height() // 2))
+        self.assertNotEqual(slider.value(), quality)
+
+    def test_wheel_leaves_model_and_native_dialog_fields_unchanged(self):
+        self.nav(2)
+        self.settle()
+        session = self.window.agent_session
+        dialog = ModelDialog(session.settings, session.provider, session.config, self.window)
+        self.addCleanup(dialog.close)
+        dialog.show()
+        dialog.advanced.click()
+        self.wait(dialog.timeout.isVisible)
+        for widget, value in ((dialog.providers, dialog.providers.currentIndex),
+                              (dialog.model, dialog.model.currentText),
+                              (dialog.timeout.lineEdit(), dialog.timeout.value)):
+            widget.setFocus()
+            before = value()
+            self.send_parameter_wheel(widget, angle=120)
+            self.send_parameter_wheel(widget, pixels=-40)
+            self.assertEqual(value(), before)
+        dialog.timeout.setValue(30)
+        QTest.keyClick(dialog.timeout, Qt.Key.Key_Up)
+        self.assertEqual(dialog.timeout.value(), 31)
+        dialog.close()
+
+        prompt = QInputDialog(self.window)
+        self.addCleanup(prompt.close)
+        prompt.setInputMode(QInputDialog.InputMode.IntInput)
+        prompt.setIntRange(16, 8192)
+        prompt.setIntValue(1280)
+        prompt.show()
+        spin = prompt.findChild(QSpinBox)
+        self.wait(spin.isVisible)
+        self.send_parameter_wheel(spin, angle=-120)
+        self.assertEqual(prompt.intValue(), 1280)
+        QTest.keyClick(spin, Qt.Key.Key_Up)
+        self.assertEqual(prompt.intValue(), 1281)
 
     def add_attachment_samples(self, video_count, *, mixed=False):
         extra = []

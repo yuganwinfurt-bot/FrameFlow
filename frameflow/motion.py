@@ -3,10 +3,12 @@
 
 from PySide6.QtCore import (QAbstractAnimation, QEvent, QEasingCurve, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal,
                             QVariantAnimation)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QStyle, QStyleOptionSlider, QHBoxLayout, QLabel, QListView, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QSlider,
-                               QSpinBox, QStyle, QStyleOptionButton, QStyleOptionSpinBox, QStyleOptionViewItem, QTabBar,
-                               QStyledItemDelegate, QLayout, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QWheelEvent
+from PySide6.QtWidgets import (QAbstractItemView, QAbstractScrollArea, QAbstractSlider, QAbstractSpinBox,
+                               QApplication, QComboBox, QHBoxLayout, QLabel, QLayout, QLineEdit, QListView,
+                               QPlainTextEdit, QPushButton, QScrollBar, QSizePolicy, QSlider, QSpinBox,
+                               QStyle, QStyledItemDelegate, QStyleOptionButton, QStyleOptionSlider,
+                               QStyleOptionSpinBox, QStyleOptionViewItem, QTabBar, QVBoxLayout, QWidget)
 
 from .theme import C, RADIUS, RADIUS_SMALL, chevron
 from .icons import pixmap as line_pixmap
@@ -79,6 +81,42 @@ def hide_vertical_scroll_bar(area):
         area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     # Qt already routes angle-based wheel events and keyboard navigation to the hidden bar.
     area.viewport().installEventFilter(_PixelScroll(area))
+
+
+class _ParameterWheelFilter(QObject):
+    def eventFilter(self, widget, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        control = widget.parentWidget() if isinstance(widget, QLineEdit) else widget
+        adjusts_value = (isinstance(control, (QComboBox, QAbstractSpinBox, QAbstractSlider))
+                         and not isinstance(control, QScrollBar))
+        picture_preset = isinstance(widget, QTabBar) and widget.objectName() == "picturePreset"
+        if not (adjusts_value or picture_preset):
+            return False
+
+        # Use the viewport's normal wheel path, including pixel-only touchpad events.
+        # Stop at a dialog or popup boundary so an unscrollable dialog cannot scroll the window behind it.
+        child, parent = widget, widget.parentWidget()
+        while parent is not None and not child.isWindow():
+            if isinstance(parent, QAbstractScrollArea) and child is parent.viewport():
+                position = event.globalPosition()
+                forwarded = QWheelEvent(child.mapFromGlobal(position), position,
+                                        event.pixelDelta(), event.angleDelta(), event.buttons(),
+                                        event.modifiers(), event.phase(), event.inverted(),
+                                        event.source(), event.pointingDevice())
+                QApplication.sendEvent(child, forwarded)
+                event.accept()
+                return True
+            child, parent = parent, parent.parentWidget()
+        event.ignore()
+        return True
+
+
+def install_parameter_wheel_policy():
+    app = QApplication.instance()
+    if app.findChild(_ParameterWheelFilter) is None:
+        # Covers both FrameFlow widgets and Qt-created controls such as QInputDialog's spin box.
+        app.installEventFilter(_ParameterWheelFilter(app))
 
 
 class NavigationBar(QTabBar):
@@ -768,7 +806,7 @@ class SpinBox(QSpinBox):
 
 
 class ClickSlider(QSlider):
-    """点击轨道立即定位，并保持按住拖动、键盘与滚轮的原有行为。"""
+    """点击轨道立即定位，支持按住拖动和键盘操作。"""
 
     def _value_from_position(self, position) -> int:
         option = QStyleOptionSlider()
