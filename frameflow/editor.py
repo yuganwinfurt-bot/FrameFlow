@@ -2012,7 +2012,7 @@ class Editor(QDialog):
             timeline_title = QHBoxLayout()
             timeline_title.addWidget(_icon_label("timeline", 17, C.accent.name()))
             timeline_title.addWidget(_text("时间轴", name="studioSection"))
-            self.timeline_hint = _text("拖动选择片段 · 右键查看操作", name="studioHint")
+            self.timeline_hint = _text("左键拖选 · 右键拖动移动帧", name="studioHint")
             self.timeline_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             self.timeline_hint.setToolTip(self.timeline_hint.text())
             timeline_title.addWidget(self.timeline_hint, 2)
@@ -2051,6 +2051,7 @@ class Editor(QDialog):
             self.timeline_zoom.valueChanged.connect(self.filmstrip.set_zoom)
             self.filmstrip.zoom_changed.connect(self.timeline_zoom.setValue)
             self.filmstrip.media_dropped.connect(self._drop_video)
+            self.filmstrip.frames_moved.connect(self._move_video_ranges)
             self.frame_context_menu = QMenu(self.filmstrip)
             self.filmstrip.frame_selected.connect(self._locate_frame)
             self.filmstrip.frame_clicked.connect(self._click_frame)
@@ -3595,9 +3596,45 @@ class Editor(QDialog):
     def _video_drop_preview(self, key):
         source = self._queued_source(key)
         if self._ready_video() and source and isinstance(source[1], (VideoInfo, ImageInfo)):
-            path, _, picture = source
-            return path.name, picture
+            path, info, picture = source
+            indexed = self.video_sources.get(path)
+            count = indexed.frames.count if indexed else (
+                1 if isinstance(info, ImageInfo) else max(1, round(info.duration * (info.fps or self.frames.fps)))
+            )
+            return path.name, picture, count
         return None
+
+    def _move_video_ranges(self, ranges, position):
+        if not self._ready_video():
+            return
+        count = sum(end - start for start, end in ranges)
+        total = length(self.video)
+        if not 0 < count < total or not 0 <= position <= total - count:
+            return
+        if len(ranges) == 1 and position == ranges[0][0]:
+            return
+
+        def move(track, units):
+            clips = [clip for start, end in ranges for clip in slice_track(track, start / units, end / units)]
+            for start, end in reversed(ranges):
+                track = splice(track, start / units, end / units)
+            return splice(track, position / units, position / units, clips)
+
+        video = move(self.video, 1)
+        audio = self.audio
+        if audio:
+            fps = self.frames.fps
+            audio = move(audio_segment(audio, 0, max(length(audio), total / fps)), fps)
+        self._stop_playback()
+        self.stop_audio()
+        self._remember()
+        self.video, self.audio = video, audio
+        self._refresh_video()
+        self._refresh_audio(reset=True)
+        self._set_video_range(position + 1, position + count)
+        self._locate_frame(position + 1)
+        self._update_range_marker()
+        self._notice(f"已移动 {count} 帧。")
 
     def _drop_video(self, key, position):
         if not self._video_drop_preview(key):

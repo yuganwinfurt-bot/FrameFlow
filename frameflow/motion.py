@@ -200,6 +200,7 @@ class PageTransition(QLayout):
     settings_location_changed = Signal(bool)
     settled = Signal()
     navigation_position = Signal(float)
+    queue_columns_progress = Signal(float)
 
     def __init__(self, parent, queue, rail, conversion_settings, workspace, rail_width, agent):
         super().__init__(parent)
@@ -338,6 +339,9 @@ class PageTransition(QLayout):
         agent_position = self.agent_position
         agent_edge = area.right() + 1 - round(workspace_width * position * agent_position)
         self.agent.setGeometry(agent_edge, area.top(), workspace_width, area.height())
+        expanded_width = area.width() - settings_width
+        fade_span = max(1, expanded_width - compact_width)
+        self.queue_columns_progress.emit(min(1.0, max(0.0, (queue_width - compact_width) / fade_span)))
 
         in_preview = position > 0 and exposed == 0
         if in_preview != self.settings_in_preview:

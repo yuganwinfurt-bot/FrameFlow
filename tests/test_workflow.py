@@ -19,7 +19,8 @@ from PIL import Image
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent, QMimeData, QPoint, QPointF, Qt, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDragMoveEvent, QDropEvent, QInputMethodEvent, QMouseEvent, QWheelEvent
+from PySide6.QtGui import (QDragEnterEvent, QDragLeaveEvent, QDragMoveEvent, QDropEvent,
+                           QInputMethodEvent, QMouseEvent, QWheelEvent)
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QPushButton, QScrollArea, QWidget
 
@@ -28,7 +29,7 @@ from frameflow.media import (convert, hardware_acceleration_choices, probe, thum
                              video_encoder_args)
 from frameflow.window import BatchFormatMenu, MainWindow
 from frameflow.editor import Editor
-from frameflow.editing import Clip, audio_preview, index_frames, length, render_edit
+from frameflow.editing import Clip, audio_preview, index_frames, length, render_edit, slice_track
 from frameflow.motion import Combo, QUEUED_MEDIA
 
 
@@ -1310,6 +1311,131 @@ class WorkflowTest(unittest.TestCase):
         self.assertAlmostEqual(exported.fps, 60, delta=.1)
         self.assertAlmostEqual(exported.duration, 1.0, delta=.05)
 
+    def test_queue_drag_retains_jobs_and_only_commits_on_drop(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1200, 780)
+        window.show()
+        paths = [self.source]
+        for i in range(5):
+            path = self.root / f"图片 {i}.png"
+            Image.new("RGB", (32, 32), (i * 30, 60, 80)).save(path)
+            paths.append(path)
+        window.add_paths(paths)
+        self.wait_for(lambda: len(window.jobs) == 6 and all(job.picture for job in window.jobs.values()), "队列")
+        original = dict(window.jobs)
+        keys = list(original)
+        key = keys[0]
+        view = window.list
+        item = window.items[key]
+        row = view.itemWidget(item)
+        view.setCurrentItem(item)
+        rect = view.visualItemRect(item)
+        motion = view.spring_drag
+        motion.start(item, rect.center() - rect.topLeft(), rect.center())
+        motion.track(view.visualItemRect(view.item(3)).center())
+        self.assertEqual(motion.slot, 3)
+        spring = motion.clock.states[1]
+        initial = spring.position
+        self.assertNotEqual(spring.target, initial)
+        spring.advance(.012)
+        self.assertLess(spring.target, spring.position)
+        self.assertLess(spring.position, initial)
+        self.assertEqual(list(window.jobs), keys)
+        motion.track(None)
+        motion.land(0, rect.center())
+        self.wait_for(lambda: not motion.isVisible(), "取消后落回")
+        self.assertEqual(list(window.jobs), keys)
+
+        self.assertTrue(window._reorder_media(key, 5))
+        expected = keys[1:] + [key]
+        self.assertEqual(list(window.jobs), expected)
+        for queue in (window.list, window.preview_files):
+            self.assertEqual([queue.item(i).data(Qt.ItemDataRole.UserRole) for i in range(6)], expected)
+            self.assertEqual(queue.currentItem().data(Qt.ItemDataRole.UserRole), key)
+        self.assertIs(view.itemWidget(item), row)
+        self.assertTrue(all(window.jobs[key] is job for key, job in original.items()))
+        with patch.object(window, "_start_batch") as start:
+            window.start_export()
+            self.assertEqual([task[0] for task in start.call_args.args[0]], expected)
+
+    def test_filmstrip_gap_animates_and_noncontiguous_move_undo_restores_both_tracks(self):
+        image = self.root / "still.png"
+        Image.new("RGB", (32, 32), "blue").save(image)
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        window.resize(1200, 780)
+        window.show()
+        window.add_paths([self.source, image])
+        self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "队列")
+        window.edit_button.click()
+        editor = window.pages.currentWidget()
+        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running, "时间轴")
+        strip = editor.filmstrip
+        original = editor.video
+        fps = editor.frames.fps
+        original_audio = [Clip(self.source, self.info.audio_stream, 0, 5 / fps)]
+        editor.audio = original_audio
+        self.addCleanup(strip.springs.reset)
+        mime = QMimeData()
+        mime.setData(QUEUED_MEDIA, next(key for key, job in window.jobs.items() if job.path == image).encode("ascii"))
+        point = QPoint(strip._tile_rect(2).left() + 4, 15)
+        enter = QDragEnterEvent(point, Qt.DropAction.CopyAction, mime,
+                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        self.app.sendEvent(strip.viewport(), enter)
+        self.assertTrue(enter.isAccepted())
+        self.assertEqual(strip.drop_position, 2)
+        spring = strip.springs.states[3]
+        self.assertEqual(spring.position, 0)
+        spring.advance(.012)
+        self.assertGreater(spring.position, 0)
+        self.assertLess(spring.position, spring.target)
+        self.app.sendEvent(strip.viewport(), QDragLeaveEvent())
+        self.wait_for(lambda: not strip.springs.timer.isActive(), "时间轴空位收回")
+        self.assertIs(editor.video, original)
+
+        button = Qt.MouseButton.RightButton
+        viewport = strip.viewport()
+        start = strip._tile_rect(1).center()
+        end = strip._tile_rect(4).center()
+        editor._set_video_range(2, 3)
+        editor.video_overrides.update({5: True, 6: True})
+        editor._update_range_marker()
+        selection = ((2, 3), (5, 6))
+        self.assertEqual(editor.video_selection, selection)
+
+        def drag_right():
+            QTest.mousePress(viewport, button, pos=start)
+            motion = QMouseEvent(QEvent.Type.MouseMove, QPointF(end), QPointF(viewport.mapToGlobal(end)),
+                                 Qt.MouseButton.NoButton, button, Qt.KeyboardModifier.NoModifier)
+            self.app.sendEvent(viewport, motion)
+            self.assertIsNotNone(strip.move_point)
+            self.assertEqual(strip.drop_position, 4)
+            self.assertEqual(strip.drop_frames, 4)
+            self.assertFalse(editor.frame_context_menu.isVisible())
+            self.assertIs(editor.video, original)
+
+        drag_right()
+        QTest.keyClick(strip, Qt.Key.Key_Escape)
+        QTest.mouseRelease(viewport, button, pos=end)
+        self.assertFalse(editor.frame_context_menu.isVisible())
+        self.assertEqual(editor.video_selection, selection)
+        self.assertIs(editor.video, original)
+        drag_right()
+        QTest.mouseRelease(viewport, button, pos=end)
+        refs = [editor._frame_ref(frame)[1] for frame in range(1, 10)]
+        self.assertEqual(refs, [0, 3, 6, 7, 1, 2, 4, 5, 8])
+        self.assertEqual(len(editor.history), 1)
+        self.assertEqual(editor.video_selection, ((5, 8),))
+        self.assertAlmostEqual(length(editor.audio), length(original) / fps)
+        silent = slice_track(editor.audio, 2 / fps, 4 / fps)
+        self.assertTrue(silent and all(clip.path is None for clip in silent))
+        moved_audio = slice_track(editor.audio, 4 / fps, 6 / fps)
+        self.assertAlmostEqual(moved_audio[0].start, 1 / fps)
+        editor.undo()
+        self.assertIs(editor.video, original)
+        self.assertIs(editor.audio, original_audio)
+
     def test_drag_queued_media_onto_frame_boundary_or_audio_marker(self):
         image = self.root / "插入图片.png"
         Image.new("RGB", (64, 96), (240, 40, 80)).save(image)
@@ -1368,7 +1494,7 @@ class WorkflowTest(unittest.TestCase):
         send_drop(audio, strip.viewport(), QPoint(20, 30), expected=False)
         item = window.preview_items[keys[image]]
         start = left.visualItemRect(item).center()
-        move = start + QPoint(22, 0)
+        move = QPoint(left.viewport().width() + 12, start.y())
         with patch("frameflow.window.QDrag") as drag:
             def execute(_action):
                 self.assertIs(window.pages.currentWidget(), editor)
@@ -2084,6 +2210,14 @@ class WorkflowTest(unittest.TestCase):
             self.assertIs(window.pages.parentWidget(), host)
             self.assertIs(editor.parentWidget(), window.pages)
             queue = window.queue_card if window.preview_rail.isHidden() else window.preview_rail
+            wide = queue is window.queue_card
+            header = window.column_header if wide else window.rail_column_header
+            view = window.list if wide else window.preview_files
+            self.assertTrue(header.isVisible())
+            self.assertEqual(window.column_header.detail, window.rail_column_header.detail)
+            first_y = view.viewport().mapTo(host, view.visualItemRect(view.item(0)).topLeft()).y()
+            header_y = header.mapTo(host, QPoint()).y()
+            self.assertEqual(first_y - header_y, header.height())
             self.assertLess(queue.geometry().right(), window.pages.x())
             self.assertEqual(window.pages.isHidden(), level == 0)
             if level > 0:
@@ -2092,7 +2226,7 @@ class WorkflowTest(unittest.TestCase):
                 settings = editor.inspector.mapTo(host, QPoint()).x()
             else:
                 center = settings = None
-            return queue.width(), window.pages.x(), center, settings
+            return queue.width(), window.pages.x(), center, settings, header.detail, first_y
 
         click(1)
         animation.pause()
@@ -2107,7 +2241,12 @@ class WorkflowTest(unittest.TestCase):
         self.wait_for(lambda: not transition.running, "转换端点")
         self.assertEqual(forward, list(reversed(backward)))
         self.assertTrue(all(a[0] > b[0] and a[1] > b[1] for a, b in zip(forward, forward[1:])))
-        self.assertEqual(len({settings - center for _, _, center, settings in forward[1:]}), 1)
+        self.assertEqual(len({settings - center for _, _, center, settings, _, _ in forward[1:]}), 1)
+        opacity = [entry[4] for entry in forward]
+        self.assertEqual((opacity[0], opacity[-1]), (1.0, 0.0))
+        self.assertTrue(any(0 < value < 1 for value in opacity))
+        self.assertEqual(opacity, sorted(opacity, reverse=True))
+        self.assertEqual(len({entry[5] for entry in forward}), 1)
         self.assertIs(window.mounted_editor, editor)
         print(f"\n转场几何 DPR={window.devicePixelRatio():.2f}，四元组为队列宽、工作区 X、播放器栏 X、右栏 X")
         for level, geometry in zip(levels, forward):

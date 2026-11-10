@@ -109,7 +109,6 @@ QLabel#queueCount { font-size: 12px; }
 QFrame#inspectorActions { background: transparent; border: none; border-top: 1px solid %(divider)s; }
 QFrame#dialogFooter { background: %(surface_alt)s; border: none; border-top: 1px solid %(border)s; }
 QFrame#columnHeader { background: %(surface_alt)s; border: none; border-bottom: 1px solid %(divider)s; }
-QLabel#columnTitle { color: %(text3)s; font-size: 12px; }
 QLabel#sectionTitle { color: %(text2)s; font-size: 12px; font-weight: 600; }
 QLabel#panelTitle { color: %(text)s; font-size: 14px; font-weight: 600; }
 QLabel#chip { background: %(sunken)s; color: %(text2)s; border-radius: 9px; padding: 1px 9px; font-size: 12px; }

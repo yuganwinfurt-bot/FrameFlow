@@ -12,9 +12,9 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QModelIndex, QObject, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
                             QUrl, Signal, Slot)
-from PySide6.QtGui import (QAction, QColor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
+from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
                            QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut)
 from PySide6.QtWidgets import (
     QDialogButtonBox, QLineEdit, QMenu, QPushButton,
@@ -37,7 +37,8 @@ from .media import convert, filename_problem, media_path_missing, output_extensi
 from .details import DetailsDialog
 from .motion import (QUEUED_MEDIA, QUEUED_MEDIA_BATCH, Button, Combo, DirectoryButton, DropArea, Motion,
                      NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar,
-                     install_parameter_wheel_policy, local_files)
+                     install_parameter_wheel_policy, local_files, queued_media_key)
+from .queue_drag import QueueDrag
 from .editor import Editor
 from .theme import STYLE, C, app_icon, brand_mark, chevron, shadow
 
@@ -247,10 +248,48 @@ def section(text: str) -> QLabel:
     return widget
 
 
-def column_title(text: str) -> QLabel:
-    widget = label(text)
-    widget.setObjectName("columnTitle")
-    return widget
+class QueueColumns(QFrame):
+    """Both queue views paint the same header at every transition width."""
+
+    columns = (("时长", W_DURATION), ("大小", W_SIZE), ("状态", W_STATE), ("输出格式", W_FORMAT))
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("columnHeader")
+        self.setAccessibleName("媒体队列表头")
+        self.setFixedHeight(QUEUE_COLUMN_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.detail = 1.0
+
+    def set_detail(self, value):
+        if value != self.detail:
+            self.detail = value
+            self.update()
+
+    def column_rects(self):
+        x = self.width() - ROW_MARGINS[2] - W_REMOVE
+        rects = []
+        for title, width in reversed(self.columns):
+            x -= width + ROW_SPACING
+            rects.append((title, QRectF(x, 0, width, self.height())))
+        return reversed(rects)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        font = painter.font()
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(C.text3)
+        align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        name_x = ROW_MARGINS[0] + THUMB_SIZE.width() + ROW_SPACING
+        painter.drawText(QRectF(name_x, 0, self.width() - name_x, self.height()), align, "名称")
+        if self.detail:
+            painter.setOpacity(self.detail)
+            painter.setClipRect(QRectF(name_x + 44, 0, self.width() - name_x - 44, self.height()))
+            for title, rect in self.column_rects():
+                painter.drawText(rect, align, title)
+        painter.end()
 
 
 def divider() -> QFrame:
@@ -507,16 +546,24 @@ def font_metrics_elide(painter: QPainter, text: str, width: float) -> str:
     return metrics.elidedText(text, Qt.TextElideMode.ElideMiddle, int(width))
 
 
-class PreviewFiles(QListWidget):
-    def __init__(self, lookup_media):
+class MediaQueue(QListWidget):
+    def __init__(self, lookup_media, can_reorder, reorder, *, narrow=False):
         super().__init__()
         self.lookup_media = lookup_media
+        self.can_reorder, self.reorder = can_reorder, reorder
         self.pressed_media = None
         self.batch_drag = False
+        self.drag_key = None
+        self.drag_slot = None
         self.setMouseTracking(True)
-        self.setItemDelegate(QueueDelegate(self))
+        if narrow:
+            self.setItemDelegate(QueueDelegate(self))
         self.setUniformItemSizes(True)
+        self.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.spring_drag = QueueDrag(self, ROW_HEIGHT)
 
     def set_batch_drag(self, enabled):
         if self.batch_drag != enabled:
@@ -528,6 +575,8 @@ class PreviewFiles(QListWidget):
                 item.setSelected(True)
 
     def mousePressEvent(self, event):
+        if self.spring_drag.landing:
+            self.spring_drag.reset()
         item = self.itemAt(event.position().toPoint())
         if event.button() == Qt.MouseButton.LeftButton and item is not None:
             # Opening the item on press would change the target editor before dragging.
@@ -538,27 +587,72 @@ class PreviewFiles(QListWidget):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        motion = self.spring_drag
+        if motion.active and not motion.native and event.buttons() & Qt.MouseButton.LeftButton:
+            if self.viewport().rect().contains(event.position().toPoint()):
+                motion.track(event.position())
+            elif self.lookup_media(self.drag_key):
+                self._drag_out(self.drag_key)
+            else:
+                motion.track(None)
+            event.accept()
+            return
         if self.pressed_media and event.buttons() & Qt.MouseButton.LeftButton:
             item, start = self.pressed_media
             if (event.position().toPoint() - start).manhattanLength() >= QApplication.startDragDistance():
                 key = item.data(Qt.ItemDataRole.UserRole)
-                if self.lookup_media(key):
+                if self.can_reorder() or self.lookup_media(key):
                     self.pressed_media = None
-                    mime = QMimeData()
-                    mime.setData(QUEUED_MEDIA, key.encode("ascii"))
-                    if self.batch_drag and item.isSelected():
-                        keys = [selected.data(Qt.ItemDataRole.UserRole) for selected in self.selectedItems()]
-                        mime.setData(QUEUED_MEDIA_BATCH, json.dumps(keys).encode("ascii"))
-                    drag = QDrag(self)
-                    drag.setMimeData(mime)
-                    drag.setPixmap(item.icon().pixmap(self.iconSize()))
-                    drag.exec(Qt.DropAction.CopyAction)
-                    drag.deleteLater()
+                    self.drag_key, self.drag_slot = key, None
+                    if self.can_reorder():
+                        grip = start - self.visualItemRect(item).topLeft()
+                        motion.start(item, grip, event.position())
+                    if not motion.active or not self.viewport().rect().contains(event.position().toPoint()):
+                        self._drag_out(key, item)
             event.accept()
         else:
             super().mouseMoveEvent(event)
 
+    def _drag_out(self, key, item=None):
+        motion = self.spring_drag
+        if motion.active:
+            item = motion.items[motion.source]
+        mime = QMimeData()
+        mime.setData(QUEUED_MEDIA, key.encode("ascii"))
+        if self.batch_drag and item is not None and item.isSelected():
+            keys = [selected.data(Qt.ItemDataRole.UserRole) for selected in self.selectedItems()]
+            mime.setData(QUEUED_MEDIA_BATCH, json.dumps(keys).encode("ascii"))
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        if motion.active:
+            motion.native = True
+            motion.track(None)
+            drag.setPixmap(motion.floating)
+            drag.setHotSpot(motion.hotspot)
+        elif item is not None:
+            drag.setPixmap(item.icon().pixmap(self.iconSize()))
+        drag.exec(Qt.DropAction.CopyAction)
+        self._finish_drag(self.viewport().mapFromGlobal(QCursor.pos()), self.drag_slot)
+        drag.deleteLater()
+
+    def _finish_drag(self, point, slot=None):
+        motion = self.spring_drag
+        if motion.active:
+            if slot is None or not self.reorder(self.drag_key, slot):
+                slot = motion.source
+            motion.land(slot, point)
+        self.drag_key, self.drag_slot = None, None
+
     def mouseReleaseEvent(self, event):
+        motion = self.spring_drag
+        if event.button() == Qt.MouseButton.LeftButton and motion.active and not motion.native:
+            point = event.position().toPoint()
+            valid = self.viewport().rect().contains(point)
+            if valid:
+                motion.track(point)
+            self._finish_drag(point, motion.slot if valid else None)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self.pressed_media:
             item, _ = self.pressed_media
             self.pressed_media = None
@@ -568,9 +662,49 @@ class PreviewFiles(QListWidget):
                     self.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
                 else:
                     self.setCurrentItem(item, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                self.itemClicked.emit(item)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        self.pressed_media = None
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.spring_drag.active and not self.spring_drag.native:
+            self._finish_drag(self.viewport().mapFromGlobal(QCursor.pos()))
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def dragEnterEvent(self, event):
+        self.dragMoveEvent(event)
+
+    def dragMoveEvent(self, event):
+        if (event.source() is self and self.spring_drag.active and self.can_reorder()
+                and self.drag_key == queued_media_key(event.mimeData())):
+            self.spring_drag.track(event.position())
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.spring_drag.track(None)
+        event.accept()
+
+    def dropEvent(self, event):
+        self.dragMoveEvent(event)
+        if event.isAccepted():
+            self.drag_slot = self.spring_drag.slot
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.spring_drag.reflow()
+
+    def hideEvent(self, event):
+        self.spring_drag.reset()
+        super().hideEvent(event)
 
 
 class BatchFormatMenu(QFrame):
@@ -780,22 +914,7 @@ class MainWindow(QMainWindow):
         queue_tools.addWidget(self.batch_settings_button)
         header_row.addWidget(self.queue_tools)
 
-        self.column_header = QFrame()
-        self.column_header.setObjectName("columnHeader")
-        self.column_header.setFixedHeight(QUEUE_COLUMN_HEIGHT)
-        self.column_header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        column_row = QHBoxLayout(self.column_header)
-        column_row.setContentsMargins(ROW_MARGINS[0], 0, ROW_MARGINS[2], 0)
-        column_row.setSpacing(ROW_SPACING)
-        gap = QWidget()
-        gap.setFixedWidth(THUMB_SIZE.width())
-        column_row.addWidget(gap)
-        column_row.addWidget(column_title("名称"), 1)
-        for text, width in (("时长", W_DURATION), ("大小", W_SIZE), ("状态", W_STATE),
-                            ("输出格式", W_FORMAT), ("", W_REMOVE)):
-            cell = column_title(text)
-            cell.setFixedWidth(width)
-            column_row.addWidget(cell)
+        self.column_header = QueueColumns()
         self.column_header.hide()
         queue_layout.addWidget(self.column_header)
 
@@ -805,7 +924,7 @@ class MainWindow(QMainWindow):
         self.drop_area.files_dropped.connect(self.add_paths)
         queue_layout.addWidget(self.drop_area, 1)
 
-        self.list = QListWidget()
+        self.list = MediaQueue(self._queued_media, self._can_reorder, self._reorder_media)
         self.list.setObjectName("queue")
         self.list.setAlternatingRowColors(False)
         self.list.setUniformItemSizes(True)
@@ -1047,6 +1166,8 @@ class MainWindow(QMainWindow):
         inspector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.page_transition = PageTransition(
             self.page_host, queue, self.preview_rail, inspector, self.pages, self._rail_width(), self.agent_page)
+        self.page_transition.queue_columns_progress.connect(self.column_header.set_detail)
+        self.page_transition.queue_columns_progress.connect(self.rail_column_header.set_detail)
         self.page_transition.settings_location_changed.connect(self._move_page_settings)
         self.page_transition.settled.connect(self._settle_page)
 
@@ -1286,10 +1407,11 @@ class MainWindow(QMainWindow):
         shadow(self.preview_rail)
         self.preview_rail.hide()
         _, self.rail_count, self.rail_add = self._add_queue_header(rail)
-        # 宽模式表头占用的高度留作间距，让文件行在切换时保持纵向对齐。
-        rail.addSpacing(QUEUE_COLUMN_HEIGHT)
+        self.rail_column_header = QueueColumns()
+        self.rail_column_header.hide()
+        rail.addWidget(self.rail_column_header)
 
-        self.preview_files = PreviewFiles(self._queued_media)
+        self.preview_files = MediaQueue(self._queued_media, self._can_reorder, self._reorder_media, narrow=True)
         self.preview_files.setObjectName("previewFiles")
         self.preview_files.setAccessibleName("媒体预览文件")
         self.preview_files.setToolTip("单击切换文件。拖到时间线或 AI Agent；在 Agent 中可按 Ctrl 多选。")
@@ -1323,6 +1445,31 @@ class MainWindow(QMainWindow):
         key = current.data(Qt.ItemDataRole.UserRole)
         if key in self.items:
             self.list.setCurrentItem(self.items[key])
+
+    def _can_reorder(self):
+        return self.scope is None and not self.closing
+
+    def _reorder_media(self, key, slot):
+        if not self._can_reorder() or key not in self.jobs or not 0 <= slot < len(self.jobs):
+            return False
+        source = self.list.row(self.items[key])
+        if source == slot:
+            return True
+        destination = slot + int(slot > source)
+        root = QModelIndex()
+        with QSignalBlocker(self.list), QSignalBlocker(self.preview_files):
+            wide, rail = self.list.model(), self.preview_files.model()
+            if not wide.moveRow(root, source, root, destination):
+                return False
+            if not rail.moveRow(root, source, root, destination):
+                wide.moveRow(root, slot, root, source + int(source > slot))
+                return False
+        keys = list(self.jobs)
+        keys.insert(slot, keys.pop(source))
+        reordered = [(key, self.jobs[key]) for key in keys]
+        self.jobs.clear()
+        self.jobs.update(reordered)
+        return True
 
     def _agent_attachment(self, key):
         job = self.jobs.get(key)
@@ -1626,6 +1773,7 @@ class MainWindow(QMainWindow):
         self.rail_clear.setEnabled(has_files and not busy)
         self.queue_tools.setVisible(has_files)
         self.column_header.setVisible(has_files)
+        self.rail_column_header.setVisible(has_files)
         self.list.setVisible(has_files)
         self.drop_area.setVisible(not has_files)
         self.drop_area.set_compact(has_files)

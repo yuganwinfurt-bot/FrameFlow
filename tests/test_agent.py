@@ -552,7 +552,8 @@ class AgentWorkspaceTest(unittest.TestCase):
             return Qt.DropAction.CopyAction
 
         QTest.mousePress(rail.viewport(), Qt.MouseButton.LeftButton, pos=second)
-        move = QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(second + QPoint(40, 0)),
+        outside = QPoint(rail.viewport().width() + 12, second.y())
+        move = QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(outside),
                            Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         with patch.object(QDrag, "exec", drag_started):
             self.app.sendEvent(rail.viewport(), move)
