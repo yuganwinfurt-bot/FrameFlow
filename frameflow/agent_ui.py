@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 import math
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QPixmap, QTextCursor, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QMenu, QProgressBar, QScrollArea, QSizePolicy,
@@ -232,9 +232,22 @@ class MessageText(QTextBrowser):
         # Model Markdown can refer to images and other resources. Never resolve them.
         return None
 
+    def preferred_width(self):
+        self.ensurePolished()
+        document = self.document()
+        wrapped_width = document.textWidth()
+        # Prevent the browser from reapplying its current viewport width during measurement.
+        with QSignalBlocker(document.documentLayout()):
+            document.setTextWidth(-1)
+            text_width = math.ceil(document.idealWidth())
+            document.setTextWidth(wrapped_width)
+        return text_width + self.width() - self.maximumViewportSize().width()
+
     def fit(self, width):
-        self.document().setTextWidth(width)
-        self.setFixedHeight(max(self.fontMetrics().height(), math.ceil(self.document().size().height()) + 2))
+        viewport = self.maximumViewportSize()
+        self.document().setTextWidth(max(1, width - (self.width() - viewport.width())))
+        height = max(self.fontMetrics().height(), math.ceil(self.document().size().height()))
+        self.setFixedHeight(height + self.height() - viewport.height())
 
 
 class Bubble(QFrame):
@@ -252,16 +265,20 @@ class Bubble(QFrame):
         self.content = MessageText(text, not user) if text else None
         if self.content:
             layout.addWidget(self.content)
-        self.preferred = max([52, 340 if attachments else 0] + [
-            self.fontMetrics().horizontalAdvance(line) + 27 for line in text.splitlines()
-        ])
+        self.preferred_minimum = 340 if attachments else 52
 
     def fit(self, width):
+        self.ensurePolished()
         cap = max(52, int((width - 30) * .75))
-        actual = min(cap, self.preferred)
+        preferred = self.preferred_minimum
+        if self.content:
+            margins = self.layout().contentsMargins()
+            inset = self.width() - self.contentsRect().width() + margins.left() + margins.right()
+            preferred = max(preferred, self.content.preferred_width() + inset)
+        actual = min(cap, preferred)
         self.setFixedWidth(actual)
         if self.content:
-            self.content.fit(actual - 26)
+            self.content.fit(actual - inset)
 
 
 class Composer(QTextEdit):
@@ -606,10 +623,13 @@ class AgentPage(QFrame):
 
     def add_history_widget(self, widget, *, right=False):
         self.conversation.setCurrentWidget(self.history)
-        if isinstance(widget, (Bubble, PlanCard)):
-            widget.fit(min(CHAT_WIDTH, self.history.viewport().width()))
+        width = min(CHAT_WIDTH, self.history.viewport().width())
+        if isinstance(widget, PlanCard):
+            widget.fit(width)
         self.messages.insertWidget(self.messages.count() - 1, widget, alignment=(
             Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft))
+        if isinstance(widget, Bubble):
+            widget.fit(width)
 
     def _history_scrolled(self, value):
         self.follow_history = self.history.verticalScrollBar().maximum() - value < 12

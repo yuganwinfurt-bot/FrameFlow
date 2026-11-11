@@ -3,7 +3,7 @@ Unicode True
 !include "x64.nsh"
 
 !define APP "帧转 FrameFlow"
-!define VERSION "1.2.2"
+!define VERSION "1.2.3"
 !define SETTINGS_KEY "Software\FrameFlow\Installer"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\FrameFlow.Setup"
 !define START_FOLDER "$SMPROGRAMS\FrameFlow"

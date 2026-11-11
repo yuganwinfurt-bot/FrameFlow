@@ -12,13 +12,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
 
 from frameflow.agent_api import ModelConfig, ModelSettings, PROBE_NAME
 from frameflow.agent_settings_ui import ModelDialog
 from frameflow.agent_ui import AgentPage, CHAT_WIDTH
 from frameflow.model_providers import CUSTOM, PROVIDERS, tool_parameters
-from frameflow.theme import app_palette
+from frameflow.theme import STYLE, app_palette
 from test_agent_api import call, mock_model, response
 
 
@@ -141,6 +141,61 @@ class AgentUxTest(unittest.TestCase):
         self.assertEqual(tool_parameters("openai", "gpt-5.6-luna"), {"reasoning_effort": "none"})
         self.assertEqual(tool_parameters("kimi", "kimi-k3.1-pro"), {"reasoning_effort": "low"})
         self.assertEqual(tool_parameters(CUSTOM, "hand-entered-model"), {})
+
+    def test_bubble_short_messages_use_the_rendered_font_and_preserve_line_breaks(self):
+        window = QWidget()
+        self.addCleanup(window.close)
+        window.setStyleSheet(STYLE)
+        page = AgentPage(lambda _: None)
+        QVBoxLayout(window).addWidget(page)
+        window.resize(1100, 650)
+        window.show()
+        messages = ("你是谁", "你能干什么", "你好，FrameFlow！", "Hello!")
+        bubbles = [page.add_message(text, user=True) for text in messages]
+        multiline = page.add_message("第一行：你好！\nSecond line。", user=True)
+        self.app.processEvents()
+
+        for text, bubble in zip(messages, bubbles):
+            with self.subTest(text=text):
+                document = bubble.content.document()
+                self.assertEqual(document.toPlainText(), text)
+                self.assertEqual(document.begin().layout().lineCount(), 1)
+                self.assertEqual(document.textWidth(), bubble.content.viewport().width())
+                self.assertLessEqual(document.size().height(), bubble.content.viewport().height())
+                self.assertLess(bubble.width(), page.message_column.width() // 3)
+
+        document = multiline.content.document()
+        self.assertEqual(document.toPlainText(), "第一行：你好！\nSecond line。")
+        self.assertEqual(document.blockCount(), 2)
+        self.assertEqual(document.begin().layout().lineCount(), 1)
+        self.assertEqual(document.lastBlock().layout().lineCount(), 1)
+
+    def test_bubble_long_message_wraps_and_refits_to_the_chat_column(self):
+        page = AgentPage(lambda _: None)
+        self.addCleanup(page.close)
+        page.resize(1180, 680)
+        page.show()
+        short = page.add_message("你是谁", user=True)
+        long = page.add_message("请把 FrameFlow 的视频转换为 H.265，再提取音频。 " * 12, user=True)
+        self.app.processEvents()
+        wide_width = long.width()
+        wide_height = long.height()
+        short_width = short.width()
+        self.assertGreater(long.content.document().begin().layout().lineCount(), 1)
+
+        page.resize(620, 680)
+        self.app.processEvents()
+        self.assertLess(long.width(), wide_width)
+        self.assertGreater(long.height(), wide_height)
+        self.assertEqual(short.width(), short_width)
+        self.assertEqual(short.content.document().begin().layout().lineCount(), 1)
+        self.assertEqual(long.content.document().textWidth(), long.content.viewport().width())
+
+        page.resize(1180, 680)
+        self.app.processEvents()
+        self.assertEqual(long.width(), wide_width)
+        self.assertEqual(long.height(), wide_height)
+        self.assertEqual(short.content.document().begin().layout().lineCount(), 1)
 
     def test_welcome_draft_chat_column_and_sticky_composer(self):
         page = AgentPage(lambda _: None)
