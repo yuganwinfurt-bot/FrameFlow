@@ -119,6 +119,7 @@ class VideoInfo:
     sample_rate: int = 0
     channels: int = 0
     channel_layout: str = ""
+    audio_duration: float = 0
 
 
 @dataclass(frozen=True)
@@ -330,6 +331,7 @@ def probe(path: Path, tools: Tools, scope: Processes) -> MediaInfo:
             int(_number(audio.get("sample_rate"))) if audio else 0,
             int(_number(audio.get("channels"))) if audio else 0,
             str(audio.get("channel_layout") or "") if audio else "",
+            _number(audio.get("duration")) if audio else 0,
         )
     except (ValueError, KeyError, OSError) as exc:
         raise MediaError("无法读取媒体信息。文件可能损坏或格式不受支持。") from exc

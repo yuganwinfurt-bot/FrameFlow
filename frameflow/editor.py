@@ -26,7 +26,7 @@ from .editing import (Clip, Frames, VideoSource, audio_preview, audio_segment, f
 from .details import DetailsView
 from .filmstrip import EDIT_KEYS, Filmstrip
 from . import icons
-from .media import output_extension
+from .media import audio_encoder_args, output_extension
 from .media import (AUDIO_EXTENSIONS, HARDWARE_BACKENDS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
                     AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
                     hardware_acceleration_choices)
@@ -1578,9 +1578,6 @@ class Editor(QDialog):
         self.size.setSuffix(" KB")
         self.size.setToolTip("指定 KB 时会尝试进一步压缩，必要时缩小分辨率。")
         picture_row("目标大小", self.size)
-        self.picture_estimate = _text("正在估算…", name="pictureValue")
-        self.picture_estimate.hide()
-
         def update_picture_preset():
             index = self.picture_preset.currentIndex()
             compact = index == 2
@@ -1814,6 +1811,8 @@ class Editor(QDialog):
             self.audio_channels.addItem(title, count)
         self.sample_row = row("采样率", self.audio_sample_rate)
         self.channels_row = row("声道", self.audio_channels)
+        self.audio_sample_rate.currentIndexChanged.connect(self._refresh_estimate)
+        self.audio_channels.currentIndexChanged.connect(self._refresh_estimate)
         self.audio_advanced = QWidget()
         self.audio_advanced.setObjectName("audioAdvancedOptions")
         audio_advanced_layout = QVBoxLayout(self.audio_advanced)
@@ -1846,8 +1845,7 @@ class Editor(QDialog):
             "质量微调", values=[100, 90, 80, 60, 40], unit="%", value=90,
             hint="质量越高通常细节越清晰，文件体积越大。", icon_name="image",
             lossless_hint="PNG 为无损格式，不提供有损质量调节。")
-        self.image_quality.changed.connect(self._schedule_estimate_tick)
-        self.image_quality.settled.connect(self._refresh_estimate)
+        self.image_quality.changed.connect(self._schedule_picture_estimate)
         self.image_quality_card = QFrame()
         self.image_quality_card.setObjectName("qualityCard")
         self.image_quality_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1906,8 +1904,6 @@ class Editor(QDialog):
         head_line.addStretch(1)
         head_line.addWidget(self.limit_toggle)
         estimate.addWidget(estimate_head)
-        self.estimate_card.setToolTip(
-            "按源文件大小、输出分辨率、质量和音频码率粗略估算；实际大小会随画面内容及编码器变化。")
         self.estimate_rows = {}
         body = QGridLayout()
         body.setContentsMargins(10, 3, 10, 5)
@@ -1916,10 +1912,11 @@ class Editor(QDialog):
         body.setColumnStretch(0, 1)
         body.setColumnStretch(1, 1)
         for row_index, (key, title) in enumerate((("source", "原始大小"), ("output", "预计输出"),
-                                                  ("delta", "预计变化"))):
+                                                  ("delta", "与源文件相比"))):
             label = _text(title, name="estimateLabel")
             value = _text("—", name="estimateValueStrong" if key == "output" else "estimateValue")
             if key == "delta":
+                self.estimate_delta_label = label
                 value.setObjectName("estimateDelta")
                 value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.estimate_rows[key] = value
@@ -2424,70 +2421,113 @@ class Editor(QDialog):
             timer.start()
 
     def _refresh_estimate(self, *_):
-        """按「原文件体积 × CRF 比例 × 像素比」粗估成品体积，明确标注为估算。"""
         if not hasattr(self, "estimate_rows"):
             return
-        if isinstance(self.info, AudioInfo):
-            duration = self.info.duration or 0
-            source = self.info.size or 0
-            bitrate = 0
-            if hasattr(self, "audio_bitrate"):
-                try:
-                    bitrate = int(self.audio_bitrate.currentData() or 0)
-                except (TypeError, ValueError):
-                    bitrate = 0
-            if not duration or not bitrate:
-                for value in self.estimate_rows.values():
-                    value.setText("—")
-                return
-            self._apply_estimate(source, bitrate * 1000 / 8 * duration)
+        if self._uses_picture_estimate() or (not self.configuration_only and self.tabs.currentWidget() is self.details_page):
             return
-        if not isinstance(self.info, VideoInfo):
-            return
-        source = self.info.size or 0
-        duration = self.info.duration or 0
-        if not source or not duration:
-            for value in self.estimate_rows.values():
-                value.setText("—")
-            return
-        quality = self.quality.value() if hasattr(self, "quality") else 23
-        quality_ratio = 2 ** ((23 - quality) / 6) if self.format.currentData() != "avi" else 1.0
-        edge = self.export_edge.currentData() or 0
-        pixel_ratio = 1.0
-        if edge and self.info.width and self.info.height:
-            longest = max(self.info.width, self.info.height)
-            if longest > edge:
-                pixel_ratio = (edge / longest) ** 1.4
-        has_audio = isinstance(self.info, VideoInfo) and self.info.audio_stream is not None
-        bitrate = self.audio_bitrate.currentData() if has_audio and hasattr(self, "audio_bitrate") else 0
-        audio_bytes = (bitrate or 0) * 1000 / 8 * duration
-        base_audio = 192 * 1000 / 8 * duration if has_audio else 0
-        fps = self.output_fps.currentData() if hasattr(self, "output_fps") else 0
-        fps_ratio = (min(1.5, fps / self.info.fps) if fps and self.info.fps else 1.0)
-        estimate = source * quality_ratio * pixel_ratio * fps_ratio + audio_bytes - base_audio
-        limit = self.export_limit.value() * 1000 if hasattr(self, "export_limit") else 0
-        if limit:
-            estimate = min(estimate, limit)
-        estimate = max(16_000, estimate)
-        self._apply_estimate(source, estimate)
-
-    def _apply_estimate(self, source: float, estimate: float) -> None:
-        """把原始/预计/变化三行写进体积卡，供音频与视频两条路径复用。"""
-        source = max(1, int(source or 0))
-        estimate = max(1, int(estimate or 0))
-        self.estimate_rows["source"].setText(_size_text(source))
-        self.estimate_rows["output"].setText(f"约 {_size_text(estimate)}")
-        change = (estimate - source) / source * 100
-        if abs(change) < .5:
-            text, tone = "基本不变", "same"
-        elif change < 0:
-            text, tone = f"减少约 {-change:.0f}%", "down"
+        options = self.output_options()
+        kind = options.format
+        if kind in _AUDIO_ENCODERS:
+            self._estimate_audio(options)
+        elif kind in _ENCODERS:
+            self._estimate_video(options)
         else:
-            text, tone = f"增加约 {change:.0f}%", "up"
-        self.estimate_rows["delta"].setText(text)
-        self.estimate_rows["delta"].setProperty("tone", tone)
-        self.estimate_rows["delta"].style().unpolish(self.estimate_rows["delta"])
-        self.estimate_rows["delta"].style().polish(self.estimate_rows["delta"])
+            self._show_estimate("无法准确预估", "GIF 体积取决于画面变化、调色板和帧率。")
+
+    def _estimate_audio(self, options):
+        source_audio = isinstance(self.info, AudioInfo)
+        if self.configuration_only:
+            duration = self.info.duration if source_audio else self.info.audio_duration
+            sample_rate, channels = self.info.sample_rate, self.info.channels
+        else:
+            duration = length(self._audio_track())
+            # 编辑导出把各段统一成 48 kHz 立体声，之后再应用用户的输出设置。
+            sample_rate, channels = 48000, 2
+        if not duration:
+            self._show_estimate("无法准确预估", "当前没有可用于估算的音轨时长。")
+            return
+        if options.format == "flac":
+            self._show_estimate("无法准确预估", "FLAC 的无损压缩率取决于实际采样内容。")
+            return
+        if options.format == "wav":
+            sample_rate = options.audio_sample_rate or sample_rate
+            channels = options.audio_channels or channels
+            if not sample_rate or not channels:
+                self._show_estimate("无法准确预估", "缺少 WAV 输出的采样率或声道数。")
+                return
+            estimate = duration * sample_rate * channels * 2 + 128
+            basis = f"{duration:.3f} 秒 × {sample_rate} Hz × {channels} 声道 × 2 字节，加上 WAV 文件头。"
+        else:
+            args = audio_encoder_args(options)
+            if "-b:a" not in args or options.size_limit:
+                self._show_estimate("无法准确预估", "可变码率或目标体积模式的最终码率取决于实际编码。")
+                return
+            rate_arg = args[args.index("-b:a") + 1]
+            bitrate = int(rate_arg.removesuffix("k")) * (1000 if rate_arg.endswith("k") else 1)
+            overhead = 1024 + (duration * 192 if options.format == "m4a" else 0)
+            estimate = duration * bitrate / 8 + overhead
+            basis = f"{duration:.3f} 秒 × {bitrate / 1000:g} kbps ÷ 8，加上少量封装开销；实际码率可能波动。"
+        self._show_estimate(f"约 {_size_text(estimate)}", basis, comparable_size=estimate if source_audio else None)
+
+    def _estimate_video(self, options):
+        source = self.info
+        duration = source.duration if self.configuration_only else self._video_duration()
+        original_only = self.configuration_only or all(clip.path == self.path for clip in self.video)
+        # 用源视频码率作参考，再根据两种编码的相对效率、画质和输出像素吞吐量调整。
+        codecs = {"H264": 1.0, "HEVC": .7, "VP9": .75, "MPEG4": 1.4}
+        output_codec = {"mp4": "H264", "mov": "H264", "mkv": "H264", "mp4_hevc": "HEVC",
+                        "mkv_hevc": "HEVC", "webm": "VP9"}.get(options.format)
+        input_factor, output_factor = codecs.get(source.codec), codecs.get(output_codec)
+        if not (duration and source.bitrate and source.fps and input_factor and output_factor and
+                original_only and options.video_acceleration == "cpu" and not options.size_limit):
+            self._show_estimate("无法准确预估", "缺少可比的源视频码率，或当前编码、混合素材及目标体积设置无法据此估算。")
+            return
+        fps = options.output_fps or (source.fps if self.configuration_only else self.frames.fps)
+        size_ratio = (options.max_edge / max(source.width, source.height)) ** 1.4 if options.max_edge else 1
+        nominal_crf = {"H264": 23, "HEVC": 26, "VP9": 32}[output_codec]
+        quality_ratio = 2 ** ((nominal_crf - (options.quality or nominal_crf)) / 6)
+        video_bytes = (duration * source.bitrate / 8 * output_factor / input_factor *
+                       size_ratio * (fps / source.fps) ** .65 * quality_ratio)
+        if self.configuration_only:
+            audio_duration = (source.audio_duration or duration) if source.audio_stream is not None else 0
+        else:
+            # render_edit 补齐音轨并在画面结束时截断。
+            audio_duration = duration if self._audio_track() else 0
+        audio_bytes = audio_duration * (options.audio_bitrate or 128) * 1000 / 8
+        lower = _size_text(video_bytes * .55 + audio_bytes)
+        upper = _size_text(video_bytes * 1.8 + audio_bytes)
+        self._show_estimate(f"约 {lower}–{upper}",
+                            f"按 {duration:.3f} 秒、编码器、画质、分辨率和帧率估算，另计音轨。"
+                            "恒定质量编码的实际大小随画面内容变化，可能超出此范围。")
+
+    def _uses_picture_estimate(self):
+        if self.configuration_only:
+            return isinstance(self.info, ImageInfo)
+        return self.image_page is not None and self.tabs.currentWidget() is self.image_page
+
+    def _show_estimate(self, text, basis, *, comparable_size=None):
+        source = self.info.size
+        self.estimate_rows["source"].setText(_size_text(source))
+        self.estimate_rows["output"].setText(text)
+        self.estimate_card.setToolTip(basis)
+        delta = self.estimate_rows["delta"]
+        comparable = comparable_size is not None and source > 0
+        delta.setVisible(comparable)
+        self.estimate_delta_label.setVisible(comparable)
+        if not comparable:
+            delta.clear()
+            return
+        change = (comparable_size - source) / source * 100
+        if abs(change) < .5:
+            change_text, tone = "基本不变", "same"
+        elif change < 0:
+            change_text, tone = f"减少约 {-change:.0f}%", "down"
+        else:
+            change_text, tone = f"增加约 {change:.0f}%", "up"
+        delta.setText(change_text)
+        delta.setProperty("tone", tone)
+        delta.style().unpolish(delta)
+        delta.style().polish(delta)
 
     def _update_output_location(self, *_):
         if not hasattr(self, "output_file_name"):
@@ -2583,12 +2623,6 @@ class Editor(QDialog):
             self.tabs.setTabIcon(index, icons.icon(tab.property("mediaIcon"), 18, color, 1.9))
         self._stop_playback()
         self._sync_panels()
-        if page not in (self.video_page, self.image_page):
-            self.picture_estimate_timer.stop()
-            self.picture_estimate_generation += 1
-            if self.picture_estimate_scope is not None:
-                self.picture_estimate_scope.cancel()
-                self.picture_estimate_scope = None
         if page is self.audio_page:
             if self.frame_scope is not None:
                 self.frame_scope.cancel()
@@ -2602,8 +2636,6 @@ class Editor(QDialog):
                 self._sync_frame_preview()
             if page is self.details_page:
                 self._update_file_details()
-            elif page is self.image_page:
-                self._schedule_picture_estimate()
         self._refresh_acceleration()
         self._update_output_location()
         self.task_changed.emit()
@@ -2629,8 +2661,6 @@ class Editor(QDialog):
             self.settings_scroll.setWidget(self.settings_body)
             self.settings_body.show()
         self._sync_panels()
-        if isinstance(self.info, ImageInfo):
-            self._schedule_picture_estimate()
 
     def _sync_panels(self):
         if hasattr(self, "settings_scroll"):
@@ -2651,6 +2681,7 @@ class Editor(QDialog):
         self._panel_picture = picture
         self._load_formats()
         self._sync_export_rows()
+        self._schedule_picture_estimate()
 
     def fit_settings_density(self, compact):
         # 说明始终保留；窗口变矮时先收掉体积估算卡，避免右栏出现滚动条。
@@ -2776,6 +2807,10 @@ class Editor(QDialog):
             self.directory_path.set_path(str(self.directory))
             self.reset_path.setVisible(self.directory != self.path.parent)
             self._update_output_location()
+            if image:
+                self._schedule_picture_estimate()
+            else:
+                self._refresh_estimate()
 
     def _custom_video_edge(self, index):
         if self.export_edge.itemData(index) != -1:
@@ -2813,6 +2848,7 @@ class Editor(QDialog):
                 merged[-1] = merged[-1][0], max(merged[-1][1], last)
             else:
                 merged.append((first, last))
+        previous_selection = self.video_selection
         self.video_selection = () if invalid else tuple(merged)
         self.filmstrip.set_selection(self.video_selection)
         if not self.frames:
@@ -2827,6 +2863,8 @@ class Editor(QDialog):
         self._selection_note = "" if message == "等待读取帧数" else message
         if hasattr(self, "selection_label"):
             self.selection_label.setText(f"· {self._selection_note}" if self._selection_note else "")
+        if self.video_selection != previous_selection and self.tabs.currentWidget() is self.image_page:
+            self._sync_frame_preview()
         self._update_timeline_header()
 
     def _range_fields_changed(self):
@@ -3187,6 +3225,7 @@ class Editor(QDialog):
         self.locate_input.setToolTip(f"可定位第 1 到 {count} 帧，输入后按回车")
         self._update_locate_button()
         self._cursor_changed(self.cursor.value())
+        self._refresh_estimate()
 
     def _cursor_changed(self, value):
         self._stop_playback()
@@ -3246,7 +3285,7 @@ class Editor(QDialog):
             origin = f" · {self.video_sources[path].name} 第 {index + 1} 帧"
         self.picture_caption.setText(self._frame_position(value) + origin)
         self.picture_save.setText(f"保存第 {value} 帧")
-        if not playing:
+        if not playing and panel is self.image_view:
             self._schedule_picture_estimate()
         if frame != self.requested_frame:
             self.failed_frame = None
@@ -3697,6 +3736,7 @@ class Editor(QDialog):
     def _refresh_audio(self, *, reset=False):
         track = self._audio_track()
         total = length(track)
+        self._refresh_estimate()
         video_end = self._video_duration()
         self.audio_view.set_overflow((video_end, total) if self.frames and total - video_end > .0005 else None)
         empty = length(self.video) / self.frames.fps if self.frames and not track else 0
@@ -4267,7 +4307,9 @@ class Editor(QDialog):
             self.picture_dimensions.setText("未知")
             return
         edge = int(self.resolution.currentData() or 0)
-        ratio = min(1.0, edge / max(width, height)) if edge else 1.0
+        ratio = edge / max(width, height) if edge else 1.0
+        if not self.configuration_only:
+            ratio = min(1.0, ratio)
         out_width = max(1, round(width * ratio))
         out_height = max(1, round(height * ratio))
         if self.image_format.currentData() == "ico":
@@ -4275,30 +4317,35 @@ class Editor(QDialog):
         self.picture_dimensions.setText(f"{out_width} × {out_height} 像素")
 
     def _schedule_picture_estimate(self, *_):
-        if not hasattr(self, "picture_estimate"):
+        if not hasattr(self, "estimate_rows"):
             return
+        self._cancel_picture_estimate()
+        if not self._uses_picture_estimate():
+            return
+        self._update_picture_dimensions()
+        if self._picture_source() is None:
+            self._show_estimate("等待视频帧就绪", "当前帧载入后会在后台编码并计算字节数。")
+            return
+        self._show_estimate("正在计算…", "按当前图片格式及设置在后台编码，计算输出字节数。")
+        self.picture_estimate_timer.start()
+
+    def _cancel_picture_estimate(self):
+        self.picture_estimate_timer.stop()
         self.picture_estimate_generation += 1
         if self.picture_estimate_scope is not None:
             self.picture_estimate_scope.cancel()
             self.picture_estimate_scope = None
-        if self.tabs.currentWidget() not in (self.video_page, self.image_page):
-            return
-        self._update_picture_dimensions()
-        self.picture_estimate.setText("正在计算文件大小…")
-        self.picture_estimate.setToolTip("")
-        self.picture_estimate_timer.start()
 
     def _estimate_picture_size(self):
-        if self.closing:
+        if self.closing or not self._uses_picture_estimate():
             return
         source = self._picture_source()
         if source is None:
-            self.picture_estimate.setText("等待视频帧就绪")
+            self._show_estimate("等待视频帧就绪", "当前帧载入后会在后台编码并计算字节数。")
             return
         path, video_info, index, _, _ = source
         if not path.is_file():
-            self.picture_estimate.setText("找不到源文件")
-            self.picture_estimate.setToolTip(str(path))
+            self._show_estimate("无法准确预估", "找不到用于编码的源文件。")
             return
         kind = self.image_format.currentData()
         quality, limit, png_compression = self._picture_encoding()
@@ -4308,40 +4355,35 @@ class Editor(QDialog):
         self.picture_estimate_scope = scope
         self.picture_estimate_pool.submit(
             self._picture_size_worker, generation, path, video_info, index, kind,
-            quality, limit, max_edge, png_compression, scope,
+            quality, limit, max_edge, png_compression, self.configuration_only and kind != "ico", scope,
         )
 
     def _picture_size_worker(self, generation, path, video_info, index, kind,
-                             quality, limit, max_edge, png_compression, scope):
+                             quality, limit, max_edge, png_compression, upscale, scope):
         try:
+            scope.check()
             source = (frame_png(path, video_info, index, self.tools, scope, preview=False)
                       if video_info is not None else path)
             size = estimate_image_size(source, kind, quality=quality, max_edge=max_edge,
-                                       limit=limit, png_compression=png_compression)
+                                       limit=limit, png_compression=png_compression, upscale=upscale)
+            scope.check()
         except Cancelled:
             return
-        except (MediaError, OSError, ValueError) as exc:
+        except (MediaError, OSError, ValueError, KeyError) as exc:
             self.events.picture_estimate.emit(generation, 0, str(exc))
         else:
             self.events.picture_estimate.emit(generation, size, "")
 
     @Slot(int, int, str)
     def _picture_estimated(self, generation, size, error):
-        if self.closing or generation != self.picture_estimate_generation:
+        if self.closing or generation != self.picture_estimate_generation or not self._uses_picture_estimate():
             return
         self.picture_estimate_scope = None
-        if error:
-            self.picture_estimate.setText("暂时无法估算")
-            self.picture_estimate.setToolTip(error)
-            if isinstance(self.info, ImageInfo) and hasattr(self, "estimate_rows"):
-                for value in self.estimate_rows.values():
-                    value.setText("—")
-        elif size >= 1_000_000:
-            self.picture_estimate.setText(f"约 {size / 1_000_000:.2f} MB（{size / 1000:.0f} KB）")
-        else:
-            self.picture_estimate.setText(f"约 {size / 1000:.1f} KB")
-        if isinstance(self.info, ImageInfo) and hasattr(self, "estimate_rows"):
-            self._apply_estimate(self.info.size or 1, size)
+        if error or not size:
+            self._show_estimate("无法准确预估", error or "编码未生成有效图片。")
+            return
+        self._show_estimate(f"约 {_size_text(size)}", f"按当前设置实际编码得到 {size:,} 字节。",
+                            comparable_size=size if isinstance(self.info, ImageInfo) else None)
 
     def _update_file_details(self):
         if hasattr(self, "details_view"):
@@ -4390,18 +4432,16 @@ class Editor(QDialog):
         self.stop_audio()
         self.seek_timer.stop()
         self.wave_reload.stop()
-        self.picture_estimate_timer.stop()
-        self.picture_estimate_generation += 1
-        if self.picture_estimate_scope is not None:
-            self.picture_estimate_scope.cancel()
-            self.picture_estimate_scope = None
+        if not self.configuration_only:
+            self._cancel_picture_estimate()
         if self.frame_scope is not None:
             self.frame_scope.cancel()
 
     def resume(self):
         if self.frames and self._frame_preview_panel() is not None:
             self.seek_timer.start()
-            self._schedule_picture_estimate()
+            if self._uses_picture_estimate():
+                self._schedule_picture_estimate()
         elif isinstance(self.info, ImageInfo) and self.tabs.currentWidget() is self.image_page:
             self._schedule_picture_estimate()
         elif self.audio_page is not None and self.tabs.currentWidget() is self.audio_page:
@@ -4419,9 +4459,7 @@ class Editor(QDialog):
             self.frame_scope.cancel()
         if self.frame_pool is not None:
             self.frame_pool.shutdown(wait=True, cancel_futures=True)
-        if self.picture_estimate_scope is not None:
-            self.picture_estimate_scope.cancel()
-        self.picture_estimate_timer.stop()
+        self._cancel_picture_estimate()
         self.picture_estimate_pool.shutdown(wait=True, cancel_futures=True)
         for animation in self.findChildren(Motion):
             animation.stop()
