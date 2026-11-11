@@ -4,16 +4,20 @@
 
 项目起于三天限时的 AI 桌面端笔试，之后扩展为三个工作区。客户端使用 PySide6 Widgets，媒体处理通过 FFmpeg、FFprobe 和 Pillow 在本机完成。AI Agent 连接用户配置的云端模型，需要网络和自己的 API Key。
 
-[下载 v1.2.0 安装版（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Setup-v1.2.0-Windows-x64.exe) · [下载 ZIP 便携版](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Windows-x64.zip) · [Agent 使用指南](docs/ai-agent.md) · [测试报告](TEST_REPORT.md)
+[下载 v1.2.1 安装版（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.1/FrameFlow-Setup-v1.2.1-Windows-x64.exe) · [下载 ZIP 便携版](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.1/FrameFlow-Windows-x64.zip) · [Agent 使用指南](docs/ai-agent.md) · [测试报告](TEST_REPORT.md)
 
 ## 下载和试用
 
 | 版本 | 下载 | 启动方式 |
 | --- | --- | --- |
-| **EXE 安装版（推荐）** | [v1.2.0 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Setup-v1.2.0-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。从开始菜单启动，可在系统设置卸载 |
-| 便携 ZIP | [v1.2.0 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
+| **EXE 安装版（推荐）** | [v1.2.1 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.1/FrameFlow-Setup-v1.2.1-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。从开始菜单启动，可在系统设置卸载 |
+| 便携 ZIP | [v1.2.1 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.1/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
 
-两种发行包来自同一次 Windows x64 构建，内置 Python、PySide6、Pillow 和 FFmpeg/FFprobe。媒体预览、编辑与转换可离线使用。v1.1.0 安装版用户可退出 FrameFlow，再运行新版安装包沿用安装位置。便携用户可把新版完整解压到独立目录。 [发行说明与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+两种发行包来自同一次 Windows x64 构建，内置 Python、PySide6、Pillow 和 FFmpeg/FFprobe。媒体预览、编辑与转换可离线使用。已安装的用户可退出 FrameFlow，再运行新版安装包沿用安装位置。便携用户可把新版完整解压到独立目录。 [发行说明与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.1) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+
+### v1.2.1 修复
+
+「格式转换」和「媒体预览」的默认视频分辨率显示为「原始分辨率」。默认导出保留视频的源尺寸。 [FF-QA-01 复测](TEST_REPORT.md#v121-resolution-acceptance)
 
 ### v1.2.0 更新
 

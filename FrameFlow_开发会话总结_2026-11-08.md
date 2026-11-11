@@ -261,6 +261,7 @@
 | v1.1.0 Windows 发行包 | ZIP 独立目录、NSIS 安装和 v1.0.1 覆盖升级均在本机实测；两包哈希及构建版本详见测试报告 |
 | Agent 开发分支 `d19beb4` | Windows 原生和离屏全量各通过 75/75，另记录系统鼠标、媒体回读、真实 DeepSeek 与开发 EXE 的实测。 [当前验收](TEST_REPORT.md#latest-development-acceptance) |
 | v1.2.0 发行验收 | Windows 原生 75/75。真实 DeepSeek 经 5 轮请求、7 次工具调用提出可确认方案，确认后 FFprobe 验证 HEVC / AAC 成品。两个发行包沿用同一份 PyInstaller 目录。 [源码验收](TEST_REPORT.md#v120-release-acceptance) · [发行包证据](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0) |
+| v1.2.1 默认分辨率修复 | 下载版验收发现 FF-QA-01。先让新增用例重现「最长边 0 px」，再补齐文案映射，保留默认导出语义。原生全量 76/76，新增回归回读两页及 Agent 的实际成品。 [验收](TEST_REPORT.md#v121-resolution-acceptance) |
 
 ### 局限和未验证项
 

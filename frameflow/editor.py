@@ -42,7 +42,7 @@ _IMAGE_ENCODERS = {"png", "jpg", "jpeg", "webp", "avif", "tiff", "bmp", "gif_ima
 
 def _friendly_edge_title(edge: int) -> str:
     """把 3840/1920 这类像素数字翻译成人话，专业信息放在括号里。"""
-    names = {3840: "超大尺寸 · 4K", 2560: "超大尺寸 · 1440P",
+    names = {0: "原始分辨率", 3840: "超大尺寸 · 4K", 2560: "超大尺寸 · 1440P",
              1920: "高清 · 1080P", 1280: "高清 · 720P",
              854: "标准 · 480P", 640: "小尺寸 · 360P"}
     return names.get(edge, f"最长边 {edge} px")

@@ -713,3 +713,17 @@ Windows 原生全量命令为 `python -m unittest discover -s tests -v`，结果
 | 其他模型厂商云端账号 | NOT TESTED | 本轮真实服务测试使用 DeepSeek，其他模型兼容行为由模拟测试覆盖。 |
 
 安装向导、开始菜单与桌面入口、覆盖升级、卸载与用户文件保护、便携包运行、构建提交和附件 SHA-256 以对应发行说明中的实测为准。第 13 节保留的资源管理器原生拖入、硬件和设备环境边界仍适用于未单独复测的路径。 [v1.2.0 发行验收与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0)
+
+<a id="v121-resolution-acceptance"></a>
+
+## 15. v1.2.1 复测 · FF-QA-01 默认分辨率
+
+| 版本 | 结果 | 证据 |
+| --- | --- | --- |
+| v1.2.0 | FAIL（P3） | 从 GitHub 下载的安装版导入 1280×720 MP4，保留默认参数。右侧显示「最长边 0 px」，实际成品仍为 1280×720。新增回归在修复前于同一文案断言失败。 |
+| v1.2.1 | PASS | 两个媒体工作区共用的分辨率标签将 0 显示为「原始分辨率」。默认参数仍为 0，标准 480P 仍为最长边 854。 |
+| v1.2.1 媒体回归 | PASS | 新增用例依次回读默认 1280×720 和手动选择的 854×480。预览页修改后，转换页显示并使用同一参数。 |
+| v1.2.1 Agent 回归 | PASS | Agent 恢复原始预设后，计划仍显示「原始尺寸」。通过工具设置最长边 640 并确认，成品回读为 640×360。 |
+| Windows 原生全量 | PASS | Windows 11 x64 构建 26200，系统 125% 缩放。 `python -m unittest discover -s tests -v` 运行 76 项，通过 76 项，用时 133.845 秒。 |
+
+本轮只修改视频分辨率文案，转换参数和 FFmpeg 编码路径保持原有语义。另有安装版窗口取样、随包 FFprobe 回读、Windows ACL 拒写和发行包完整性复测。实际结果和构建哈希随同标签发布。独立无 Python 的 Windows、其他机器的 SmartScreen、其他厂商的真实 API 目前缺少环境或可用凭据，记为 NOT TESTED。 [文案实现](frameflow/editor.py#L43) · [v1.2.1 发行包验收](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.1)

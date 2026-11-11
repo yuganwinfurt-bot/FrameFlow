@@ -861,6 +861,56 @@ class WorkflowTest(unittest.TestCase):
         self.assertIs(window.mounted_editor, shared)
         self.assertEqual(shared.codec.currentData(), "mkv_hevc")
 
+    def test_video_resolution_label_and_export_are_shared_across_workspaces(self):
+        source = self.root / "分辨率样片.mp4"
+        Processes().run([
+            self.tools.ffmpeg, "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+            "testsrc2=size=1280x720:rate=24", "-t", "0.5", "-c:v", "libx264",
+            "-preset", "ultrafast", str(source),
+        ], timeout=20)
+        window = self.open_export_window(source)
+        job = window._selected()
+        editor = window.mounted_editor
+
+        def export_size():
+            QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+            self.assertIsNotNone(window.scope)
+            self.wait_for(lambda: window.scope is None, "分辨率成品已导出")
+            self.assertEqual(job.state, "已完成", job.detail)
+            info = probe(job.output, self.tools, Processes())
+            return info.width, info.height
+
+        self.assertEqual(editor.export_edge.currentText(), "原始分辨率")
+        self.assertEqual(editor.output_options().max_edge, 0)
+        self.assertEqual(export_size(), (1280, 720))
+
+        window.navigation.setCurrentIndex(1)
+        self.wait_for(lambda: not window.page_transition.running, "进入预览工作区")
+        self.assertEqual(editor.export_edge.currentText(), "原始分辨率")
+        editor.export_edge.setCurrentIndex(editor.export_edge.findData(854))
+        window.navigation.setCurrentIndex(0)
+        self.wait_for(lambda: not window.page_transition.running, "返回转换工作区")
+        self.assertEqual(editor.export_edge.currentText(), "标准 · 480P")
+        self.assertEqual(window._job_export(job).max_edge, 854)
+        self.assertEqual(export_size(), (854, 480))
+
+        window.navigation.setCurrentIndex(2)
+        self.wait_for(lambda: not window.page_transition.running, "进入 Agent 工作区")
+        agent = window.agent_tools
+        self.assertEqual(agent.set_resolution(job.key, preset="original")["long_edge"], 0)
+        agent.prepare_conversion([job.key])
+        plan = agent.pending
+        self.assertTrue(any("原始尺寸" in label.text() for label in plan.card.findChildren(QLabel)))
+        plan.card.cancel.click()
+        self.assertEqual(agent.set_resolution(job.key, long_edge=640)["long_edge"], 640)
+        agent.prepare_conversion([job.key])
+        agent.pending.card.confirm.click()
+        self.assertIsNotNone(agent.active)
+        self.wait_for(lambda: agent.active is None, "Agent 分辨率成品已导出")
+        self.assertEqual(job.state, "已完成", job.detail)
+        info = probe(job.output, self.tools, Processes())
+        self.assertEqual((info.width, info.height), (640, 360))
+
     def test_edited_timeline_plays_pauses_and_cleans_up(self):
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)

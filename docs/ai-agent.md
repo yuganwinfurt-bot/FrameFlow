@@ -4,7 +4,7 @@ AI Agent 是第三个 Windows 桌面工作区。左侧沿用媒体队列，右�
 
 ## 开始使用
 
-在 v1.2.0 Windows 安装版或便携版启动 FrameFlow，进入顶部「AI Agent」，点击「API 设置」。从源码运行时，在项目目录执行 `.\.venv\Scripts\python.exe run.pyw`。AI Agent 需要联网及自己的 API Key，媒体转换和编辑可离线使用。 [下载 v1.2.0](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0)
+在 Windows 安装版或便携版启动 FrameFlow，进入顶部「AI Agent」，点击「API 设置」。从源码运行时，在项目目录执行 `.\.venv\Scripts\python.exe run.pyw`。AI Agent 需要联网及自己的 API Key，媒体转换和编辑可离线使用。 [下载 v1.2.1](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.1)
 
 1. 在「模型服务配置」里选择厂商，从下拉选模型或输入完整模型 ID，再填写 API Key。选择「自定义」或打开「高级设置」可填写 API Base URL，支持填写完整的 `/chat/completions` 地址。高级设置也可调整请求超时时间。
 2. 点击「测试连接」。FrameFlow 用一个小型函数探测请求检查鉴权、模型与工具调用，探测阶段只发送测试文本。点「保存」后保留当前厂商的配置。使用未探测的配置首次发消息时也会先检查工具调用。
