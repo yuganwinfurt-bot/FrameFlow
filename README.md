@@ -1,29 +1,38 @@
 # 帧转 FrameFlow
 
-**在 Windows 上预览、剪辑和批量转换视频、音频与图片。** 拖入素材后即可查看缩略图、分辨率、时长和编码。所有媒体处理在本机完成。
+**FrameFlow（帧转）是集媒体转换、逐帧编辑与 AI Agent 操作为一体的 Windows 桌面应用。** 拖入视频、音频或图片即可查看缩略图和媒体信息。也可以用自然语言设置批量转换，核对计划后再执行。
 
-这是一个三天限时的 AI 桌面端开发笔试项目。客户端使用 PySide6 Widgets，媒体处理通过 FFmpeg、FFprobe 和 Pillow 完成。
+项目起于三天限时的 AI 桌面端笔试，之后扩展为三个工作区。客户端使用 PySide6 Widgets，媒体处理通过 FFmpeg、FFprobe 和 Pillow 在本机完成。AI Agent 连接用户配置的云端模型，需要网络和自己的 API Key。
 
-[下载安装包（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Setup-v1.1.0-Windows-x64.exe) · [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [测试报告](TEST_REPORT.md)
+[下载 v1.2.0 安装版（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Setup-v1.2.0-Windows-x64.exe) · [下载 ZIP 便携版](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Windows-x64.zip) · [Agent 使用指南](docs/ai-agent.md) · [测试报告](TEST_REPORT.md)
 
 ## 下载和试用
 
 | 版本 | 下载 | 启动方式 |
 | --- | --- | --- |
-| **EXE 安装版（推荐）** | [v1.1.0 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Setup-v1.1.0-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。安装完成后可从开始菜单启动 |
-| 便携 ZIP | [v1.1.0 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.1.0/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
+| **EXE 安装版（推荐）** | [v1.2.0 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Setup-v1.2.0-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。从开始菜单启动，可在系统设置卸载 |
+| 便携 ZIP | [v1.2.0 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.0/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
 
-两种发行包来自同一次 Windows x64 构建，内置 Python 运行环境、PySide6、Pillow 和 FFmpeg/FFprobe，可离线使用。v1.0.1 安装版用户可关闭 FrameFlow，再运行新版安装包覆盖升级。便携用户可把新版完整解压到独立目录。 [查看发行说明](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.1.0) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+两种发行包来自同一次 Windows x64 构建，内置 Python、PySide6、Pillow 和 FFmpeg/FFprobe。媒体预览、编辑与转换可离线使用。v1.1.0 安装版用户可退出 FrameFlow，再运行新版安装包沿用安装位置。便携用户可把新版完整解压到独立目录。 [发行说明与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
 
-### v1.1.0 更新
+### v1.2.0 更新
 
-- 「格式转换」和「媒体预览」之间切换时，队列平滑收缩或展开，播放器与输出设置作为真实 Qt 控件一起移动。
-- 宽窄队列采用统一的缩略图、选中效果和清空按钮布局。
-- 批量格式应用到兼容的队列项。转换页和预览页的自定义文件名会写入实际成品，同名时自动加序号。
+- **AI Agent 工作区**支持 13 个工具，可读取素材、调整输出参数、生成转换方案、查询进度和取消 Agent 发起的转换。
+- **三个工作区连续转场**共享素材队列，预览状态和本次会话随切页保留。
+- **拖拽和时间轴编辑**支持队列弹簧排序、右键移动帧、拖入素材时的插入指示线、拖拽滚动和边缘自动滚动。
+- **滚轮操作**可浏览设置面板，悬停在播放音量、视频质量或时间轴缩放滑块上时可直接调节。
 
 试用时，先拖入一个 MP4 文件，选中队列里的素材，在右侧设置输出格式和目录。点「开始转换」，完成后点「打开成品」。切到「媒体预览」可以逐帧查看并保存当前帧。
 
+## AI Agent 快速试用
+
+进入「AI Agent → API 设置」，选择支持 Chat Completions 工具调用的模型服务，填写自己的 API Key 并测试连接。把素材拖入聊天区后，可以说「把附件转成 MP4 H.265，输出名叫项目预览，先给我转换方案」。在桌面计划卡中核对文件和路径，点「确认执行」后才会启动 FFmpeg。
+
+应用会向模型服务发送对话和工具所需的素材名称与媒体信息。媒体文件由本机处理。可用输出目录来自源目录、已有设置或用户选择的目录。 [13 个工具、模型设置与权限说明](docs/ai-agent.md)
+
 ## 界面截图
+
+![FrameFlow AI Agent 工作区，左侧为合成视频素材，右侧为对话与媒体操作入口](docs/agent-workspace.png)
 
 <table>
 <tr>
@@ -52,6 +61,7 @@
 | 预览与编辑 | 播放、全屏、音量、逐帧浏览、时间线选段。支持音视频联动裁剪、波形选段和单帧导出 |
 | 音频与图片 | 提取视频音轨，转换 MP3、M4A、WAV、FLAC、Opus、OGG。图片支持 PNG、JPEG、WebP、AVIF、TIFF、BMP、GIF、ICO、PDF |
 | 成品管理 | 选择保存目录、取消转换、打开成品。同名输出自动加序号，保留源文件和已有成品 |
+| AI Agent | 通过自然语言读取媒体信息、设置格式和质量、选择已授权输出目录、生成转换计划并查看结果 |
 
 实际可用的硬件编码选项取决于 FFmpeg 构建、显卡与驱动。目标体积是编码目标，成品大小取决于素材与编码器。
 
@@ -63,6 +73,8 @@
 | [窗口与队列](frameflow/window.py) | Qt 主线程更新界面，后台线程探测媒体和处理批量任务。每个素材保存独立的导出参数 |
 | [媒体处理](frameflow/media.py) | FFprobe 读取元数据，FFmpeg 生成缩略图、转码并回传进度。`Processes` 管理子进程取消，成品从临时文件发布 |
 | [编辑与播放](frameflow/editor.py) · [片段渲染](frameflow/editing.py) · [播放调度](frameflow/playback.py) | 逐帧预览按需解码。剪切与粘贴更新片段引用，预览和导出按同一时间线渲染 |
+| [Agent 会话](frameflow/agent.py) · [模型连接](frameflow/agent_api.py) | Qt 通过异步网络请求收发 Chat Completions 消息和工具调用。Windows 使用当前用户的 DPAPI 保存凭据 |
+| [工具与确认](frameflow/agent_tools.py) | 根据队列 ID 和目录权限校验工具参数。用户确认计划后，将任务参数快照提交给原有 FFmpeg 转换队列 |
 | [工作流测试](tests/test_workflow.py) | 覆盖真实导出、参数隔离、异步定位、音视频联动、取消与同名保护 |
 
 一个实际问题是，实拍视频有 **6.76 秒**，音轨约 **6.18 秒**就结束，选择多段帧时预览会卡在准备阶段。修复后，渲染按每段时长建立静音底轨，再叠加实际音频。用原来的四段选区复测，共 **34 帧**，成功播放到最后一帧。 [复现与回归记录](SESSION_SUMMARY.md) · [音轨渲染代码](frameflow/editing.py)
@@ -73,8 +85,8 @@
 
 - [功能演进记录](SESSION_SUMMARY.md)｜需求变更、技术方案与阶段验证。
 - [界面改版记录](docs/session-2026-11-07.md)｜参考图、用户反馈、界面取舍与回归。
-- v1.1.0 正式发行前实测了便携版、安装、覆盖升级和卸载，构建源码回归 44/44。 [正式版测试报告](TEST_REPORT.md#12-v110-windows-x64-发行包验收2026-11-09)
-- 后续 Agent 开发分支在 Windows 原生窗口和离屏各通过 75/75，补充了弹簧拖拽、三页转场、真实工具调用及开发 EXE 验收。 [开发版测试报告](TEST_REPORT.md#latest-development-acceptance)
+- v1.1.0 的便携、安装、覆盖升级和卸载验收，以及后续 Agent 开发分支的 124 项通过记录均有保留。 [历史测试报告](TEST_REPORT.md)
+- v1.2.0 的源码回归、真实模型验收、Windows 包测试和两种附件校验值见本次发行记录。 [源码验收](TEST_REPORT.md#v120-release-acceptance) · [发行包验收](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.0)
 
 独立无 Python 的干净机器和人耳判断声画同步仍待验证。 [验收记录](TEST_REPORT.md)
 

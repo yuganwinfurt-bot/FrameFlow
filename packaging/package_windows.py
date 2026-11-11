@@ -15,7 +15,7 @@ import PyInstaller
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / "packaging"
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def add_notices(payload: Path) -> None:
