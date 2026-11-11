@@ -11,12 +11,14 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
 from stat import S_ISREG
 from typing import BinaryIO
+from uuid import uuid4
 
 from PIL import Image, ImageOps
 
@@ -681,6 +683,18 @@ def _publish(temporary: Path, directory: Path, stem: str, extension: str) -> Pat
     raise MediaError("同名输出文件过多，请改用其他输出文件夹。")
 
 
+@contextmanager
+def _output_workspace(directory: Path, prefix: str):
+    directory.mkdir(parents=True, exist_ok=True)
+    folder = directory / f"{prefix}{uuid4().hex}"
+    # On Windows, tempfile.mkdtemp may retry ACL permission errors as name collisions.
+    folder.mkdir(mode=0o700)
+    try:
+        yield folder
+    finally:
+        shutil.rmtree(folder)
+
+
 def convert(
     source: Path, info: MediaInfo, options: Export, tools: Tools, scope: Processes,
     progress: Callable[[int], None], *, notice: Callable[[str], None] = lambda _message: None,
@@ -698,9 +712,8 @@ def convert(
     stem = resolve_output_stem(options.output_stem, source.stem)
     directory = options.directory or source.parent
     scope.check()
-    directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".frameflow-", dir=directory) as folder:
-        temporary = Path(folder) / f"output.{extension}"
+    with _output_workspace(directory, ".frameflow-") as folder:
+        temporary = folder / f"output.{extension}"
         common = [tools.ffmpeg, "-v", "error", "-nostdin", "-y",
                   "-progress", "pipe:1", "-nostats"]
 

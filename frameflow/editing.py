@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from array import array
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .media import (HARDWARE_BACKENDS, AudioInfo, Cancelled, Export, ImageInfo, MediaError,
                     Processes, Tools, VideoInfo, audio_encoder_args, video_encoder_args)
-from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _publish, _save_image_to_limit,
+from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _output_workspace, _publish, _save_image_to_limit,
                     _with_bitrates, convert, output_extension, probe, resolve_output_stem)
 
 
@@ -296,8 +295,7 @@ def render_edit(source, video, audio, fps, options: Export, tools: Tools, scope:
     stem = target.stem if target is not None else resolve_output_stem(options.output_stem, f"{source.stem}_编辑")
     directory = target.parent if target is not None else options.directory or source.parent
     extension = output_extension(kind)
-    directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".frameflow-edit-", dir=directory) as folder:
+    with _output_workspace(directory, ".frameflow-edit-") as folder:
         temp = Path(folder) / ("edit.mkv" if kind == "gif" else f"edit.{extension}")
         output_fps = options.output_fps if video and kind != "gif" else 0
         inputs, graph = _graph(video, audio, fps, canvas=canvas, max_edge=options.max_edge,
@@ -382,9 +380,8 @@ def save_picture(source, video_info, index, kind, quality, limit, directory, too
     else:
         default = f"{source.stem}_帧{index + 1:06}" if video_info is not None else f"{source.stem}_图片"
         stem = resolve_output_stem(output_stem, default)
-    directory.mkdir(parents=True, exist_ok=True)
     extension = "gif" if kind == "gif_image" else kind
-    with tempfile.TemporaryDirectory(prefix=".frameflow-frame-", dir=directory) as folder:
+    with _output_workspace(directory, ".frameflow-frame-") as folder:
         if video_info is not None:
             picture = Path(folder) / "frame.png"
             picture.write_bytes(frame_png(frame_path or source, video_info, index, tools, scope, preview=False))

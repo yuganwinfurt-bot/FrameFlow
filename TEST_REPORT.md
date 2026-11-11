@@ -716,7 +716,7 @@ Windows 原生全量命令为 `python -m unittest discover -s tests -v`，结果
 
 <a id="v121-resolution-acceptance"></a>
 
-## 15. v1.2.1 复测 · FF-QA-01 默认分辨率
+## 15. v1.2.1 复测 · 默认分辨率与 Windows 导出目录拒写
 
 | 版本 | 结果 | 证据 |
 | --- | --- | --- |
@@ -724,6 +724,15 @@ Windows 原生全量命令为 `python -m unittest discover -s tests -v`，结果
 | v1.2.1 | PASS | 两个媒体工作区共用的分辨率标签将 0 显示为「原始分辨率」。默认参数仍为 0，标准 480P 仍为最长边 854。 |
 | v1.2.1 媒体回归 | PASS | 新增用例依次回读默认 1280×720 和手动选择的 854×480。预览页修改后，转换页显示并使用同一参数。 |
 | v1.2.1 Agent 回归 | PASS | Agent 恢复原始预设后，计划仍显示「原始尺寸」。通过工具设置最长边 640 并确认，成品回读为 640×360。 |
-| Windows 原生全量 | PASS | Windows 11 x64 构建 26200，系统 125% 缩放。 `python -m unittest discover -s tests -v` 运行 76 项，通过 76 项，用时 133.845 秒。 |
+| Windows 原生全量 | PASS | Windows 11 x64 构建 26200，系统 125% 缩放。两项修复完成后，`python -m unittest discover -s tests -v` 运行 77 项，通过 77 项，用时 133.523 秒。 |
 
-本轮只修改视频分辨率文案，转换参数和 FFmpeg 编码路径保持原有语义。另有安装版窗口取样、随包 FFprobe 回读、Windows ACL 拒写和发行包完整性复测。实际结果和构建哈希随同标签发布。独立无 Python 的 Windows、其他机器的 SmartScreen、其他厂商的真实 API 目前缺少环境或可用凭据，记为 NOT TESTED。 [文案实现](frameflow/editor.py#L43) · [v1.2.1 发行包验收](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.1)
+### 补测发现的 Windows ACL 拒写问题
+
+| 测试 | 结果 | 证据 |
+| --- | --- | --- |
+| 首次候选安装包 | FAIL | 在独立测试目录为当前用户拒绝创建文件和子目录，确认 Windows 返回拒写，同时源视频仍可读取。点击「开始转换」后任务卡在 0%，正常关窗也无法结束。两次复现均未创建成品。 |
+| 拒写回归 | PASS | 将 Windows 临时目录重试上限缩至两次后，旧实现把拒写报为文件名冲突。修复后仅尝试创建一次临时目录，原始权限错误直接进入现有任务失败流程，无临时目录残留。 |
+
+批量转换、编辑导出和保存单帧共用一次性创建的同卷临时目录，继续沿用原来的成品发布和同名保护。FFmpeg 编码参数保持原有语义。最终构建的安装、便携版、ACL 实测和 SHA-256 记录在发行说明。 [文案实现](frameflow/editor.py#L43) · [临时目录实现](frameflow/media.py#L687) · [v1.2.1 发行包验收](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.1)
+
+独立且无 Python 的 Windows、其他机器的 SmartScreen、其他厂商的真实 API 缺少独立环境或可用凭据，记为 NOT TESTED。

@@ -17,7 +17,7 @@
 
 ### v1.2.1 修复
 
-「格式转换」和「媒体预览」的默认视频分辨率显示为「原始分辨率」。默认导出保留视频的源尺寸。 [FF-QA-01 复测](TEST_REPORT.md#v121-resolution-acceptance)
+「格式转换」和「媒体预览」的默认视频分辨率显示为「原始分辨率」，默认导出保留源尺寸。Windows 拒绝写入输出目录时，转换任务会报告失败并结束。 [修复和复测记录](TEST_REPORT.md#v121-resolution-acceptance)
 
 ### v1.2.0 更新
 

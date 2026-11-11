@@ -110,6 +110,25 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(MediaError):
             probe(invalid, self.tools, Processes())
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows 对拒写目录的访问检查行为")
+    def test_denied_output_directory_does_not_retry_workspace_creation(self):
+        attempts = []
+        mkdir = os.mkdir
+
+        def deny_workspace(path, *args, **kwargs):
+            path = Path(path)
+            if path.parent == self.root and path.name.startswith(".frameflow-"):
+                attempts.append(path)
+                raise PermissionError(13, "Access denied", str(path))
+            return mkdir(path, *args, **kwargs)
+
+        # Bound the standard library's Windows retry loop so a regression fails quickly.
+        with patch("tempfile.TMP_MAX", 2), patch("os.mkdir", side_effect=deny_workspace):
+            with self.assertRaises(PermissionError):
+                convert(self.source, self.info, Export("mp4", self.root), self.tools, Processes(), lambda _: None)
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(list(self.root.glob(".frameflow-*")), [])
+
     def test_convert_all_formats_and_keep_existing_files(self):
         original = self.source.read_bytes()
         occupied = self.root / "样片 01.mp4"
