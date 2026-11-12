@@ -4,16 +4,20 @@
 
 项目起于三天限时的 AI 桌面端笔试，之后扩展为三个工作区。客户端使用 PySide6 Widgets，媒体处理通过 FFmpeg、FFprobe 和 Pillow 在本机完成。AI Agent 连接用户配置的云端模型，需要网络和自己的 API Key。
 
-[下载 v1.2.3 安装版（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.3/FrameFlow-Setup-v1.2.3-Windows-x64.exe) · [下载 ZIP 便携版](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.3/FrameFlow-Windows-x64.zip) · [Agent 使用指南](docs/ai-agent.md) · [测试报告](TEST_REPORT.md)
+[下载 v1.2.4 安装版（Windows x64）](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.4/FrameFlow-Setup-v1.2.4-Windows-x64.exe) · [下载 ZIP 便携版](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.4/FrameFlow-Windows-x64.zip) · [Agent 使用指南](docs/ai-agent.md) · [测试报告](TEST_REPORT.md)
 
 ## 下载和试用
 
 | 版本 | 下载 | 启动方式 |
 | --- | --- | --- |
-| **EXE 安装版（推荐）** | [v1.2.3 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.3/FrameFlow-Setup-v1.2.3-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。从开始菜单启动，可在系统设置卸载 |
-| 便携 ZIP | [v1.2.3 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.3/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
+| **EXE 安装版（推荐）** | [v1.2.4 安装包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.4/FrameFlow-Setup-v1.2.4-Windows-x64.exe) | 双击进入中文安装向导，可选择安装目录和桌面快捷方式。从开始菜单启动，可在系统设置卸载 |
+| 便携 ZIP | [v1.2.4 便携包](https://github.com/yuganwinfurt-bot/FrameFlow/releases/download/v1.2.4/FrameFlow-Windows-x64.zip) | 完整解压后双击 `FrameFlow.exe`，保留同目录的 `_internal` 文件夹 |
 
-两种发行包来自同一次 Windows x64 构建，内置 Python、PySide6、Pillow 和 FFmpeg/FFprobe。媒体预览、编辑与转换可离线使用。已安装的用户可退出 FrameFlow，再运行新版安装包沿用安装位置。便携用户可把新版完整解压到独立目录。 [发行说明与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.3) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+两种发行包来自同一次 Windows x64 构建，内置 Python、PySide6、Pillow 和 FFmpeg/FFprobe。媒体预览、编辑与转换可离线使用。已安装的用户可退出 FrameFlow，再运行新版安装包沿用安装位置。便携用户可把新版完整解压到独立目录。 [发行说明与校验值](https://github.com/yuganwinfurt-bot/FrameFlow/releases/tag/v1.2.4) · [全部发行版本](https://github.com/yuganwinfurt-bot/FrameFlow/releases)
+
+### v1.2.4 修复
+
+窗口还原后再次最大化，媒体队列表头和文件行按实际视口重新对齐，输出格式下拉框和删除按钮保持完整可见。 [Windows 验收](TEST_REPORT.md#v124-queue-resize-acceptance)
 
 ### v1.2.3 修复
 
@@ -48,7 +52,7 @@ AI Agent 聊天气泡按实际文本排版计算尺寸。短消息保持单行�
 
 <table>
 <tr>
-<td><img src="docs/desktop-preview.png" alt="格式转换页，左侧为素材队列，右侧为输出设置" width="420"></td>
+<td><img src="docs/queue-resize.png" alt="v1.2.4 格式转换页，重新最大化后五行素材的输出格式和删除按钮完整可见" width="420"></td>
 <td><img src="docs/editor-panel.png" alt="媒体预览页，包含播放器、时间线和输出设置" width="420"></td>
 </tr>
 <tr>
@@ -104,7 +108,7 @@ AI Agent 聊天气泡按实际文本排版计算尺寸。短消息保持单行�
 
 ## 从源码运行
 
-开发分支的第三个工作区支持通过云端模型调用队列和转换工具。配置方式、目录授权和确认流程见 [AI Agent 使用说明](docs/ai-agent.md)。
+AI Agent 工作区支持通过云端模型调用队列和转换工具。配置方式、目录授权和确认流程见 [AI Agent 使用说明](docs/ai-agent.md)。
 
 ```powershell
 git clone https://github.com/yuganwinfurt-bot/FrameFlow.git
