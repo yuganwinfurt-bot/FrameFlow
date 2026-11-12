@@ -1,10 +1,15 @@
 ﻿__pycache__/
 *.py[cod]
 .venv/
+.pytest_cache/
+.env
+.env.*
+!.env.example
 bin/*.exe
 bin/*.dll
 *.log
 *.lnk
+*.reg
 .idea/
 .vscode/
 dist/
