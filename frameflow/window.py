@@ -12,7 +12,7 @@ from os.path import isdir
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QModelIndex, QObject, QPoint, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt,
+from PySide6.QtCore import (QEvent, QItemSelectionModel, QMimeData, QModelIndex, QObject, QPoint, QPointF, QProcess, QRectF, QSignalBlocker, QSize, Qt, QTimer,
                             QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QColor, QCursor, QDesktopServices, QDrag, QFont, QGuiApplication, QIcon,
                            QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut)
@@ -260,14 +260,21 @@ class QueueColumns(QFrame):
         self.setFixedHeight(QUEUE_COLUMN_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.detail = 1.0
+        self.content_span = None
 
     def set_detail(self, value):
         if value != self.detail:
             self.detail = value
             self.update()
 
+    def set_content_span(self, left, width):
+        if self.content_span != (left, width):
+            self.content_span = left, width
+            self.update()
+
     def column_rects(self):
-        x = self.width() - ROW_MARGINS[2] - W_REMOVE
+        left, width = self.content_span or (0, self.width())
+        x = left + width - ROW_MARGINS[2] - W_REMOVE
         rects = []
         for title, width in reversed(self.columns):
             x -= width + ROW_SPACING
@@ -282,11 +289,13 @@ class QueueColumns(QFrame):
         painter.setFont(font)
         painter.setPen(C.text3)
         align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        name_x = ROW_MARGINS[0] + THUMB_SIZE.width() + ROW_SPACING
-        painter.drawText(QRectF(name_x, 0, self.width() - name_x, self.height()), align, "名称")
+        left, width = self.content_span or (0, self.width())
+        name_x = left + ROW_MARGINS[0] + THUMB_SIZE.width() + ROW_SPACING
+        right = left + width
+        painter.drawText(QRectF(name_x, 0, max(0, right - name_x), self.height()), align, "名称")
         if self.detail:
             painter.setOpacity(self.detail)
-            painter.setClipRect(QRectF(name_x + 44, 0, self.width() - name_x - 44, self.height()))
+            painter.setClipRect(QRectF(name_x + 44, 0, max(0, right - name_x - 44), self.height()))
             for title, rect in self.column_rects():
                 painter.drawText(rect, align, title)
         painter.end()
@@ -547,7 +556,7 @@ def font_metrics_elide(painter: QPainter, text: str, width: float) -> str:
 
 
 class MediaQueue(QListWidget):
-    def __init__(self, lookup_media, can_reorder, reorder, *, narrow=False, timeline_drag=None):
+    def __init__(self, lookup_media, can_reorder, reorder, *, narrow=False, timeline_drag=None, column_header=None):
         super().__init__()
         self.lookup_media = lookup_media
         self.timeline_drag = timeline_drag
@@ -556,6 +565,11 @@ class MediaQueue(QListWidget):
         self.batch_drag = False
         self.drag_key = None
         self.drag_slot = None
+        self.column_header = column_header
+        if column_header is not None:
+            self.row_geometry_timer = QTimer(self)
+            self.row_geometry_timer.setSingleShot(True)
+            self.row_geometry_timer.timeout.connect(self._sync_row_geometry)
         self.setMouseTracking(True)
         if narrow:
             self.setItemDelegate(QueueDelegate(self))
@@ -735,6 +749,19 @@ class MediaQueue(QListWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if self.column_header is None:
+            self.spring_drag.reflow()
+        else:
+            # A window resize can change the viewport twice as the inspector takes
+            # its new width. Refit the index widgets after both layout passes.
+            self.row_geometry_timer.start(0)
+
+    def _sync_row_geometry(self):
+        self.updateEditorGeometries()
+        viewport = self.viewport()
+        header = self.column_header
+        left = viewport.mapTo(header.parentWidget(), QPoint()).x() - header.x()
+        header.set_content_span(left, viewport.width())
         self.spring_drag.reflow()
 
     def hideEvent(self, event):
@@ -959,7 +986,8 @@ class MainWindow(QMainWindow):
         self.drop_area.files_dropped.connect(self.add_paths)
         queue_layout.addWidget(self.drop_area, 1)
 
-        self.list = MediaQueue(self._queued_media, self._can_reorder, self._reorder_media)
+        self.list = MediaQueue(self._queued_media, self._can_reorder, self._reorder_media,
+                               column_header=self.column_header)
         self.list.setObjectName("queue")
         self.list.setAlternatingRowColors(False)
         self.list.setUniformItemSizes(True)

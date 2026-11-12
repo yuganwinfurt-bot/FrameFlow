@@ -2456,6 +2456,93 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(window.queue_card.geometry().right() + 1, window.inspector.x())
         self.assertTrue(window.pages.isHidden())
 
+    def test_queue_columns_stay_inside_viewport_after_repeated_window_resize(self):
+        window = MainWindow(self.tools)
+        self.addCleanup(window.close)
+        # Qt's offscreen backend can maximize below the application's minimum size.
+        # Use a wide client resize there; native runs exercise real window states.
+        native_window_states = self.app.platformName() != "offscreen"
+
+        def expand_window():
+            if native_window_states:
+                window.showMaximized()
+                self.wait_for(window.isMaximized, "最大化窗口")
+            else:
+                window.resize(1510, 930)
+                window.show()
+
+        expand_window()
+
+        audio = self.root / "音频.wav"
+        Processes().run([self.tools.ffmpeg, "-v", "error", "-i", str(self.source),
+                         "-vn", str(audio)], timeout=20)
+        media = (self.source.read_bytes(), audio.read_bytes())
+        paths = []
+        for index in range(18):
+            kind = index % 2
+            name = f"{index:02} " + "长文件名测试 Long media filename " * 3
+            path = self.root / (name + (".mov", ".wav")[kind])
+            path.write_bytes(media[kind])
+            paths.append(path)
+        window.add_paths(paths)
+        self.wait_for(lambda: len(window.jobs) == len(paths) and
+                      all(job.info is not None for job in window.jobs.values()), "视频与音频导入完成")
+        view = window.list
+        viewport = view.viewport()
+        header = window.column_header
+        sizes = ((940, 720), (1177, 900), (1366, 768))
+
+        def check_visible_rows():
+            self.app.processEvents()
+            bounds = viewport.rect()
+            viewport_x = viewport.mapTo(window.queue_card, QPoint()).x()
+            header_x = header.mapTo(window.queue_card, QPoint()).x()
+            columns = tuple(rect for _, rect in header.column_rects())
+            visible_count = 0
+            for index in range(view.count()):
+                item = view.item(index)
+                rect = view.visualItemRect(item)
+                if rect.height() <= 0 or rect.top() < bounds.top() or rect.bottom() > bounds.bottom():
+                    continue
+                visible_count += 1
+                row = view.itemWidget(item)
+                self.assertEqual(row.geometry(), rect, f"队列第 {index + 1} 行几何未同步")
+                self.assertEqual(row.width(), bounds.width())
+                self.assertEqual(row.name.width(), row.length_label.x() - row.name.x() - row.layout().spacing())
+                for field, column in zip((row.length_label, row.size_label, row.state, row.format), columns):
+                    self.assertEqual(field.mapTo(viewport, QPoint()).x() + viewport_x, column.left() + header_x)
+                    self.assertEqual(field.width(), column.width())
+                for control in (row.format, row.remove_button):
+                    self.assertTrue(control.isVisible())
+                    self.assertTrue(bounds.contains(control.rect().translated(control.mapTo(viewport, QPoint()))))
+                    self.assertTrue(control.visibleRegion().contains(control.rect()))
+            self.assertGreater(visible_count, 0)
+
+        check_visible_rows()
+        for cycle in range(10):
+            width, height = sizes[cycle % len(sizes)]
+            with self.subTest(cycle=cycle + 1, normal_size=(width, height)):
+                if native_window_states:
+                    window.showNormal()
+                    self.wait_for(lambda: not window.isMaximized(), "还原窗口")
+                window.resize(width, height)
+                QTest.qWait(30)
+                check_visible_rows()
+                expand_window()
+                QTest.qWait(30)
+                check_visible_rows()
+                scroll = view.verticalScrollBar()
+                self.assertGreater(scroll.maximum(), 0)
+                scroll.setValue(scroll.maximum())
+                check_visible_rows()
+                scroll.setValue(0)
+
+        # A visible native scrollbar reduces the viewport without narrowing the card.
+        hidden_scrollbar_width = viewport.width()
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.wait_for(lambda: viewport.width() < hidden_scrollbar_width, "队列为滚动条留出空间")
+        check_visible_rows()
+
     def test_queue_styles_keep_header_row_height_and_scroll_aligned(self):
         window = MainWindow(self.tools)
         self.addCleanup(window.close)
