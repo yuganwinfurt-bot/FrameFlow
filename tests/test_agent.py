@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 import time
-import unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +13,7 @@ from PIL import Image
 from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
 from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QDoubleSpinBox, QInputDialog, QSpinBox, QToolButton
+from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QInputDialog, QLabel, QSpinBox, QToolButton
 
 from frameflow.agent_api import PROBE_NAME
 from frameflow.agent_settings_ui import ModelDialog
@@ -22,17 +21,18 @@ from frameflow.agent_ui import AttachmentCard
 from frameflow.media import Processes, Tools, probe
 from frameflow.motion import QUEUED_MEDIA, QUEUED_MEDIA_BATCH
 from frameflow.window import MainWindow
-from test_agent_api import call, mock_model, response
+from agent_test_support import call, mock_model, response
+from qt_test_support import GuiTestCase
 
 
-class AgentWorkspaceTest(unittest.TestCase):
+class AgentWorkspaceTest(GuiTestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
-        cls.app.setQuitOnLastWindowClosed(False)
+        super().setUpClass()
         cls.tools = Tools.find()
 
     def setUp(self):
+        super().setUp()
         self.temp = tempfile.TemporaryDirectory(prefix="FrameFlow Agent ")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -85,8 +85,7 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.assertFalse(agent.dispatch("set_quality", json.dumps({"id": key}))["ok"])
         agent.prepare_conversion([key])
         self.assertEqual(agent.pending.entries[0].options.size_limit, 20_000_000)
-        labels = [agent.pending.card.content.itemAt(i).widget() for i in range(agent.pending.card.content.count())]
-        self.assertTrue(any("目标 20 MB" in label.text() for label in labels if hasattr(label, "text")))
+        self.assertTrue(any("目标 20 MB" in label.text() for label in agent.pending.card.findChildren(QLabel)))
         self.wait(agent.pending.card.confirm.isVisible)
 
     def drop(self, keys, *, batch=False):
@@ -815,3 +814,44 @@ class AgentWorkspaceTest(unittest.TestCase):
         self.assertEqual(agent.get_task_status(cancelled.id)["status"], "cancelled")
         self.assertFalse(list(self.root.glob(".frameflow-*")))
         self.assertTrue(self.second.is_file())
+
+    def test_duplicate_tool_ids_abort_reply_before_any_tool_side_effect(self):
+        self.nav(2)
+        self.settle()
+        agent = self.window.agent_tools
+        key = self.keys[0]
+        before = agent.get_media_info(key)["output"]
+        quality = 18 if before["quality"] != 18 else 30
+
+        def model(body):
+            if body.get("tool_choice"):
+                return 200, response(None, call(PROBE_NAME))
+            return 200, response(None, call("set_quality", {"id": key, "quality": quality}, "duplicate"),
+                                 call("prepare_conversion", {"ids": [key]}, "duplicate"))
+
+        with mock_model(model) as (config, requests):
+            self.window.agent_session.config = config
+            self.page.input.setPlainText("改画质并生成转换计划")
+            QTest.mouseClick(self.page.send_button, Qt.MouseButton.LeftButton)
+            self.wait(lambda: len(requests) >= 2 and not self.page.busy)
+            self.assertEqual(len(requests), 2)
+            self.assertIn("不合法", self.page.activity.text())
+        self.assertEqual(agent.get_media_info(key)["output"], before)
+        self.assertIsNone(agent.pending)
+        self.assertIsNone(self.window.scope)
+
+    def test_cancelled_plan_cannot_be_replayed_by_model(self):
+        self.nav(2)
+        self.settle()
+        agent = self.window.agent_tools
+        key = self.keys[0]
+        self.assertTrue(agent.dispatch("prepare_conversion", json.dumps({"ids": [key]}))["ok"])
+        plan = agent.pending
+        before = set(self.root.iterdir())
+        QTest.mouseClick(plan.card.cancel, Qt.MouseButton.LeftButton)
+        self.assertIsNone(agent.pending)
+        result = agent.dispatch("start_conversion", json.dumps({"plan_id": plan.id}))
+        self.assertFalse(result["ok"])
+        self.assertIn("找不到", result["error"])
+        self.assertIsNone(self.window.scope)
+        self.assertEqual(set(self.root.iterdir()), before)

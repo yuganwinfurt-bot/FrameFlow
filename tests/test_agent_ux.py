@@ -10,29 +10,22 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QFont
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
 
 from frameflow.agent_api import ModelConfig, ModelSettings, PROBE_NAME
 from frameflow.agent_settings_ui import ModelDialog
 from frameflow.agent_ui import AgentPage, CHAT_WIDTH
 from frameflow.model_providers import CUSTOM, PROVIDERS, tool_parameters
-from frameflow.theme import STYLE, app_palette
-from test_agent_api import call, mock_model, response
+from frameflow.theme import STYLE
+
+from agent_test_support import call, mock_model, response
+from qt_test_support import GuiTestCase
 
 
-class AgentUxTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
-        cls.app.setStyle("Fusion")
-        cls.app.setPalette(app_palette())
-        if sys.platform == "win32":
-            cls.app.setFont(QFont("Microsoft YaHei UI", 9))
-        cls.app.setQuitOnLastWindowClosed(False)
-
+class AgentUxTest(GuiTestCase):
     def setUp(self):
+        super().setUp()
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.path = str(Path(temp.name) / "agent.ini")
