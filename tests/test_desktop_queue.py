@@ -419,7 +419,7 @@ class DesktopQueueTest(WorkflowFixture):
         self.wait_for(lambda: editor.scope is None and length(editor.session.video) == base + 1, "图片插入一帧")
         self.assertIs(window.pages.currentWidget(), editor)
         picture_ref = editor.session.frame_ref(2)
-        self.wait_for(lambda: editor.shown_frame == picture_ref and picture_ref in strip.cache, "插入帧预览与缩略图")
+        self.wait_for(lambda: editor.frame_preview.shown_frame == picture_ref and picture_ref in strip.cache, "插入帧预览与缩略图")
         outputs = []
         editor.saved.connect(outputs.append)
         editor.save_image()
@@ -538,7 +538,7 @@ class DesktopQueueTest(WorkflowFixture):
         video_editor = window.pages.currentWidget()
         window.navigation.setCurrentIndex(0)
         self.wait_for(lambda: not window.page_transition.running and
-                      video_editor.scope is None and video_editor.frame_scope is None
+                      video_editor.scope is None and video_editor.frame_preview.scope is None
                       and video_editor.filmstrip.scope is None, "视频预览已释放文件")
         moved_video = self.root / "移动后的视频.mov"
         video.rename(moved_video)

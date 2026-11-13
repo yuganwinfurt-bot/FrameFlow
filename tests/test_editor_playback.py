@@ -27,7 +27,7 @@ class EditorPlaybackTest(WorkflowFixture):
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.session.frames and editor.shown_frame == (self.source, 0), "首帧预览")
+        self.wait_for(lambda: editor.session.frames and editor.frame_preview.shown_frame == (self.source, 0), "首帧预览")
         editor.timeline_zoom.setValue(0)
         self.assertGreater(editor.filmstrip._stride(), 1)
         self.assertEqual(editor.filmstrip.horizontalScrollBar().maximum(), 0)
@@ -43,7 +43,7 @@ class EditorPlaybackTest(WorkflowFixture):
             QTest.mouseClick(editor.transport.play_button, Qt.MouseButton.LeftButton)
             player = editor.transport.playback
             self.wait_for(lambda: editor.cursor.value() >= 5, "播放跨过已剪掉的区间")
-            self.assertEqual(editor.shown_frame, (self.source, editor.cursor.value() + 4))
+            self.assertEqual(editor.frame_preview.shown_frame, (self.source, editor.cursor.value() + 4))
             self.assertNotEqual(editor.transport.frame_view.original.cacheKey(), old_preview)
             if output is not None:
                 output.assert_called_once_with(player.wav)
@@ -110,7 +110,7 @@ class EditorPlaybackTest(WorkflowFixture):
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.shown_frame == (self.source, 0), "首帧")
+        self.wait_for(lambda: editor.frame_preview.shown_frame == (self.source, 0), "首帧")
         view = editor.transport.frame_view
         original_image = view.original.cacheKey()
         original_rect = view.geometry()
@@ -136,14 +136,14 @@ class EditorPlaybackTest(WorkflowFixture):
                 time.sleep(.22)
             return frame_png(path, info, index, tools, scope)
 
-        with patch("frameflow.editor.frame_png", side_effect=slow_frame):
+        with patch("frameflow.preview_requests.frame_png", side_effect=slow_frame):
             editor.cursor.setValue(8)
             self.wait_for(entered.is_set, "首个后台请求开始")
             editor.cursor.setValue(18)
             self.assertEqual(view.original.cacheKey(), original_image)
             self.assertEqual(view.geometry(), original_rect)
             self.assertEqual(editor.timeline.geometry(), original_timeline)
-            self.wait_for(lambda: editor.shown_frame == (self.source, 17) and editor.frame_scope is None, "显示最后选中帧")
+            self.wait_for(lambda: editor.frame_preview.shown_frame == (self.source, 17) and editor.frame_preview.scope is None, "显示最后选中帧")
         self.assertNotEqual(view.original.cacheKey(), original_image)
         self.assertEqual(view.geometry(), original_rect)
         self.assertEqual(editor.timeline.geometry(), original_timeline)
@@ -153,7 +153,7 @@ class EditorPlaybackTest(WorkflowFixture):
         QTest.mouseDClick(view, Qt.MouseButton.LeftButton)
         self.assertEqual(view._image_rect(), fit_rect)
         editor.cursor.setValue(1)
-        self.assertEqual(editor.shown_frame, (self.source, 0))
+        self.assertEqual(editor.frame_preview.shown_frame, (self.source, 0))
 
     def test_embedded_media_preview_audio_zoom_pan_and_playback(self):
         window = MainWindow(self.tools)

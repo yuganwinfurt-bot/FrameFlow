@@ -42,6 +42,7 @@ from .motion import (Button, Combo, DirectoryPathEdit, Motion, QualityRow, SpinB
                      hide_vertical_scroll_bar)
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
+from .preview_requests import FramePreview, PictureEstimate
 from .video_transport import VideoTransport
 from .wave_view import WaveView
 
@@ -60,8 +61,6 @@ class EditorEvents(QObject):
     finished = Signal(object, str)
     progress = Signal(int)
     notice = Signal(str)
-    frame_ready = Signal(object, object, str)
-    picture_estimate = Signal(int, int, str)
 
 
 class Editor(QDialog):
@@ -103,19 +102,13 @@ class Editor(QDialog):
         self.on_error = None
         self.closing = False
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-editor")
-        self.frame_pool = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-seek")
-                           if isinstance(info, VideoInfo) else None)
-        self.picture_estimate_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-image-size")
-        self.frame_scope = None
-        self.picture_estimate_scope = None
-        self.picture_estimate_generation = 0
-        self.picture_estimate_timer = QTimer(self)
-        self.picture_estimate_timer.setSingleShot(True)
-        self.picture_estimate_timer.setInterval(260)
-        self.picture_estimate_timer.timeout.connect(self._estimate_picture_size)
-        self.frame_inflight = None
-        self.frame_cache = OrderedDict()
-        self.requested_frame = self.shown_frame = self.failed_frame = None
+        self.frame_preview = FramePreview(
+            self, tools, panel=self._frame_preview_panel, is_image_panel=lambda: self._page_kind() == "image",
+            can_decode=lambda: self.scope is None and not self._video_is_playing()
+            and (not self.embedded or self.isVisible()),
+            is_playing=self._video_is_playing, source_info=lambda path: self.session.video_sources[path].info,
+            report_error=self._preview_error, missing_source=self.missing_source.emit,
+        ) if isinstance(info, VideoInfo) else None
         self.scratch = tempfile.TemporaryDirectory(prefix="frameflow-preview-")
         self.listen_wav = Path(self.scratch.name) / "listen.wav"
         self.playing = False
@@ -128,10 +121,6 @@ class Editor(QDialog):
         self.events = EditorEvents(self)
         self.events.finished.connect(self._finished)
         self.events.progress.connect(self._progress)
-        self.events.frame_ready.connect(self._frame_ready)
-        self.events.picture_estimate.connect(self._picture_estimated)
-        self.seek_timer = QTimer(self, singleShot=True, interval=55)
-        self.seek_timer.timeout.connect(self._seek)
         self.setWindowTitle(f"编辑与预览 · {path.name}")
         self.resize(1010, 740)
         self._build()
@@ -146,7 +135,7 @@ class Editor(QDialog):
         if isinstance(self.info, VideoInfo):
             self._run("正在读取真实帧数…", self._load_index, self._indexed)
         elif isinstance(self.info, ImageInfo):
-            self._schedule_picture_estimate()
+            self.picture_estimate.schedule()
             self._run("正在读取图片…", self._load_picture, self._show_image)
         elif self.audio_page is not None:
             self._tab_changed()
@@ -334,7 +323,9 @@ class Editor(QDialog):
             task_running=lambda: self.scope is not None,
         )
         side_scroll.setWidget(self.settings)
-        self.settings.picture_inputs_changed.connect(self._schedule_picture_estimate)
+        self.picture_estimate = PictureEstimate(self, self.tools, self.settings, self._picture_source,
+                                               source_is_image=isinstance(self.info, ImageInfo))
+        self.settings.picture_inputs_changed.connect(self.picture_estimate.schedule)
         self.settings.save_picture_requested.connect(self.save_image)
         self.settings.settings_changed.connect(self.settings_changed)
         self.settings.directory_changed.connect(self.directory_changed)
@@ -662,15 +653,15 @@ class Editor(QDialog):
         self._stop_video()
         self._sync_panels()
         if page is self.audio_page:
-            if self.frame_scope is not None:
-                self.frame_scope.cancel()
+            if self.frame_preview is not None:
+                self.frame_preview.cancel_decode()
             self._refresh_audio(reset=not self.audio_range_initialized)
             if self.media_started and self.session.audio_track():
                 self.preview_audio()
         else:
             self.stop_audio()
             if self.session.frames:
-                self.shown_frame = self.failed_frame = None
+                self.frame_preview.invalidate()
                 self._sync_frame_preview()
             if page is self.details_page:
                 self._update_file_details()
@@ -1035,8 +1026,8 @@ class Editor(QDialog):
             done(result)
         self._update_audio_toolbar()
         self.task_changed.emit()
-        if self.session.frames and self._frame_preview_panel() is not None and self.requested_frame != self.shown_frame:
-            self.seek_timer.start()
+        if self.session.frames and self._frame_preview_panel() is not None and self.frame_preview.requested_frame != self.frame_preview.shown_frame:
+            self.frame_preview.resume()
         if self.scope is None and self.wave_pending and self.tabs.currentWidget() is self.audio_page:
             self.wave_reload.start()
 
@@ -1138,78 +1129,15 @@ class Editor(QDialog):
         self.settings.picture_caption.setText(self._frame_position(value) + origin)
         self.settings.picture_save.setText(f"保存第 {value} 帧")
         if not playing and panel is self.image_view:
-            self._schedule_picture_estimate()
-        if frame != self.requested_frame:
-            self.failed_frame = None
-        self.requested_frame = frame
-        if playing:
-            return
-        if frame in self.frame_cache:
-            if self.frame_scope is not None and self.frame_inflight != frame:
-                self.frame_scope.cancel()
-            self.frame_cache.move_to_end(frame)
-            if self.shown_frame != frame:
-                self._display(panel, self.frame_cache[frame])
-                self.shown_frame = frame
-        else:
-            if panel is self.image_view and frame not in (self.shown_frame, self.failed_frame):
-                self.shown_frame = None
-                panel.setText(f"正在读取第 {value} 帧…")
-            self.seek_timer.start()
+            self.picture_estimate.schedule()
+        self.frame_preview.request(frame, value, playing=playing)
 
-    def _seek(self):
-        if (self.closing or self.scope is not None or (self.transport is not None and self.transport.playback is not None)
-                or (self.embedded and not self.isVisible())
-                or self._frame_preview_panel() is None):
-            return
-        frame = self.requested_frame
-        if frame is None or frame in (self.shown_frame, self.failed_frame):
-            return
-        if self.frame_scope is not None:
-            if self.frame_inflight != frame:
-                self.frame_scope.cancel()
-            return
-        self.frame_inflight = frame
-        self.frame_scope = Processes()
-        self.frame_pool.submit(self._decode_frame, frame, self.session.video_sources[frame[0]].info, self.frame_scope)
+    def _preview_error(self, message, detail):
+        self._notice(message)
+        self.status.setToolTip(detail)
 
-    def _decode_frame(self, frame, info, scope):
-        path, index = frame
-        try:
-            data = frame_png(path, info, index, self.tools, scope)
-        except Cancelled:
-            self.events.frame_ready.emit(frame, None, "")
-        except (MediaError, OSError) as exc:
-            self.events.frame_ready.emit(frame, None, str(exc))
-        else:
-            self.events.frame_ready.emit(frame, data, "")
-
-    @Slot(object, object, str)
-    def _frame_ready(self, frame, data, error):
-        self.frame_scope = self.frame_inflight = None
-        if self.closing:
-            return
-        if data:
-            self.frame_cache[frame] = data
-            while len(self.frame_cache) > 12:
-                self.frame_cache.popitem(last=False)
-        if self.transport is not None and self.transport.playback is not None:
-            return
-        panel = self._frame_preview_panel()
-        if frame == self.requested_frame and panel is not None:
-            if data:
-                self._display(panel, data)
-                self.shown_frame = frame
-            elif error:
-                self.failed_frame = frame
-                if panel is self.image_view:
-                    panel.setText("当前帧读取失败")
-                self._notice("当前帧读取失败")
-                self.status.setToolTip(error)
-                if media_path_missing(frame[0]):
-                    self.missing_source.emit(frame[0])
-        if panel is not None and self.requested_frame not in (self.shown_frame, self.failed_frame):
-            self.seek_timer.start()
+    def _video_is_playing(self):
+        return self.transport is not None and self.transport.playback is not None
 
     def _canvas_for(self, video):
         if any(clip.path != self.path for clip in video):
@@ -1221,19 +1149,16 @@ class Editor(QDialog):
             self.transport.stop()
 
     def _suspend_seek(self):
-        self.seek_timer.stop()
-        if self.frame_scope is not None:
-            self.frame_scope.cancel()
+        self.frame_preview.suspend()
 
     def _playback_stopped(self):
         if not self.closing:
-            self.shown_frame = self.failed_frame = None
-            self.seek_timer.start()
+            self.frame_preview.invalidate()
+            self.frame_preview.resume()
 
     def _video_played(self, number, data):
         self._sync_cursor(number, playing=True)
-        self._display(self.transport.frame_view, data)
-        self.shown_frame = self.requested_frame
+        self.frame_preview.present_played(data)
 
     def _ready_video(self):
         return self.session.frames is not None and self.scope is None
@@ -1879,75 +1804,6 @@ class Editor(QDialog):
         info = self.session.video_sources[path].info
         return path, info, index, info.width, info.height
 
-    def _schedule_picture_estimate(self, *_):
-        if not hasattr(self, "settings"):
-            return
-        self._cancel_picture_estimate()
-        if not self.settings.uses_picture_estimate():
-            return
-        self.settings.update_picture_dimensions()
-        if self._picture_source() is None:
-            self.settings.show_estimate("等待视频帧就绪", "当前帧载入后会在后台编码并计算字节数。")
-            return
-        self.settings.show_estimate("正在计算…", "按当前图片格式及设置在后台编码，计算输出字节数。")
-        self.picture_estimate_timer.start()
-
-    def _cancel_picture_estimate(self):
-        self.picture_estimate_timer.stop()
-        self.picture_estimate_generation += 1
-        if self.picture_estimate_scope is not None:
-            self.picture_estimate_scope.cancel()
-            self.picture_estimate_scope = None
-
-    def _estimate_picture_size(self):
-        if self.closing or not self.settings.uses_picture_estimate():
-            return
-        source = self._picture_source()
-        if source is None:
-            self.settings.show_estimate("等待视频帧就绪", "当前帧载入后会在后台编码并计算字节数。")
-            return
-        path, video_info, index, _, _ = source
-        if not path.is_file():
-            self.settings.show_estimate("无法准确预估", "找不到用于编码的源文件。")
-            return
-        kind = self.settings.image_format.currentData()
-        quality, limit, png_compression = self.settings.picture_encoding()
-        max_edge = int(self.settings.resolution.currentData() or 0)
-        generation = self.picture_estimate_generation
-        scope = Processes()
-        self.picture_estimate_scope = scope
-        self.picture_estimate_pool.submit(
-            self._picture_size_worker, generation, path, video_info, index, kind,
-            quality, limit, max_edge, png_compression, self.settings.configuration_only and kind != "ico", scope,
-        )
-
-    def _picture_size_worker(self, generation, path, video_info, index, kind,
-                             quality, limit, max_edge, png_compression, upscale, scope):
-        try:
-            scope.check()
-            source = (frame_png(path, video_info, index, self.tools, scope, preview=False)
-                      if video_info is not None else path)
-            size = estimate_image_size(source, kind, quality=quality, max_edge=max_edge,
-                                       limit=limit, png_compression=png_compression, upscale=upscale)
-            scope.check()
-        except Cancelled:
-            return
-        except (MediaError, OSError, ValueError, KeyError) as exc:
-            self.events.picture_estimate.emit(generation, 0, str(exc))
-        else:
-            self.events.picture_estimate.emit(generation, size, "")
-
-    @Slot(int, int, str)
-    def _picture_estimated(self, generation, size, error):
-        if self.closing or generation != self.picture_estimate_generation or not self.settings.uses_picture_estimate():
-            return
-        self.picture_estimate_scope = None
-        if error or not size:
-            self.settings.show_estimate("无法准确预估", error or "编码未生成有效图片。")
-            return
-        self.settings.show_estimate(f"约 {_size_text(size)}", f"按当前设置实际编码得到 {size:,} 字节。",
-                            comparable_size=size if isinstance(self.info, ImageInfo) else None)
-
     def _update_file_details(self):
         if hasattr(self, "details_view"):
             picture = None
@@ -1993,20 +1849,19 @@ class Editor(QDialog):
             self.transport.close_fullscreen()
         self._stop_video()
         self.stop_audio()
-        self.seek_timer.stop()
+        if self.frame_preview is not None:
+            self.frame_preview.suspend()
         self.wave_reload.stop()
         if not self.settings.configuration_only:
-            self._cancel_picture_estimate()
-        if self.frame_scope is not None:
-            self.frame_scope.cancel()
+            self.picture_estimate.cancel()
 
     def resume(self):
         if self.session.frames and self._frame_preview_panel() is not None:
-            self.seek_timer.start()
+            self.frame_preview.resume()
             if self.settings.uses_picture_estimate():
-                self._schedule_picture_estimate()
+                self.picture_estimate.schedule()
         elif isinstance(self.info, ImageInfo) and self.tabs.currentWidget() is self.image_page:
-            self._schedule_picture_estimate()
+            self.picture_estimate.schedule()
         elif self.audio_page is not None and self.tabs.currentWidget() is self.audio_page:
             if self.audio_available:
                 self.preview_audio()
@@ -2018,12 +1873,9 @@ class Editor(QDialog):
         self.suspend()
         if self.filmstrip is not None:
             self.filmstrip.shutdown()
-        if self.frame_scope is not None:
-            self.frame_scope.cancel()
-        if self.frame_pool is not None:
-            self.frame_pool.shutdown(wait=True, cancel_futures=True)
-        self._cancel_picture_estimate()
-        self.picture_estimate_pool.shutdown(wait=True, cancel_futures=True)
+        if self.frame_preview is not None:
+            self.frame_preview.shutdown()
+        self.picture_estimate.shutdown()
         for animation in self.findChildren(Motion):
             animation.stop()
         if self.scope:

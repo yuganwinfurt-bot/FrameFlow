@@ -102,7 +102,7 @@ class EditorExportTest(WorkflowFixture):
             self.assertIs(editor.tabs.currentWidget(), editor.image_page)
             self.assertTrue(editor.timeline.isHidden())
             self.assertTrue(editor.settings.export_group.isHidden())
-            self.wait_for(lambda: editor.shown_frame == (self.source, number - 1)
+            self.wait_for(lambda: editor.frame_preview.shown_frame == (self.source, number - 1)
                           and editor.image_view.original is not None, "图片页首帧预览")
             pass
 
@@ -223,10 +223,10 @@ class EditorExportTest(WorkflowFixture):
         editor.tabs.setCurrentWidget(editor.image_page)
         editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("png"))
         self.assertEqual(output.text(), "正在计算…")
-        old_request = editor.picture_estimate_generation
+        old_request = editor.picture_estimate.generation
         select_frames(40, 40)
-        self.assertGreater(editor.picture_estimate_generation, old_request)
-        editor._picture_estimated(old_request, 827800, "")
+        self.assertGreater(editor.picture_estimate.generation, old_request)
+        editor.picture_estimate._picture_estimated(old_request, 827800, "")
         self.assertEqual(output.text(), "正在计算…")
         self.wait_for(lambda: output.text().startswith("约 "), "当前帧 PNG 试编码")
         self.assertTrue(delta.isHidden())
@@ -236,9 +236,9 @@ class EditorExportTest(WorkflowFixture):
         self.assertEqual(output.text(), f"约 {_size_text(picture_size)}")
         self.assertIn(f"{picture_size:,} 字节", editor.settings.estimate_card.toolTip())
         self.assertEqual(probe(exports[2], self.tools, Processes()).codec, "PNG")
-        current_request = editor.picture_estimate_generation
+        current_request = editor.picture_estimate.generation
         editor.tabs.setCurrentWidget(editor.video_page)
-        editor._picture_estimated(current_request, picture_size, "")
+        editor.picture_estimate._picture_estimated(current_request, picture_size, "")
         self.assertEqual(output.text(), longer_video)
 
     def test_image_editor_reduces_size_without_changing_source(self):
