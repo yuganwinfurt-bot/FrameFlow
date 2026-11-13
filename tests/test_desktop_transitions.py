@@ -63,7 +63,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         self.assertFalse(hasattr(editor, "frame_label"))
         self.assertTrue(editor.media_summary.isVisible())
         self.assertTrue(editor.settings.directory_group.isVisible())
-        self.assertTrue(editor.play_button.visibleRegion().boundingRect().contains(editor.play_button.rect()))
+        self.assertTrue(editor.transport.play_button.visibleRegion().boundingRect().contains(editor.transport.play_button.rect()))
         first_item = window.preview_files.item(0)
         QTest.mouseClick(window.preview_files.viewport(), Qt.MouseButton.LeftButton,
                          pos=window.preview_files.visualItemRect(first_item).center())
@@ -128,7 +128,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         self.assertEqual(window.pages.geometry().right(), right)
         self.assertTrue(window.queue_card.isHidden())
         self.assertIs(window.pages.currentWidget(), editor)
-        point = editor.frame_view.mapTo(host, editor.frame_view.rect().center())
+        point = editor.transport.frame_view.mapTo(host, editor.transport.frame_view.rect().center())
         self.assertTrue(editor.isAncestorOf(host.childAt(point)))
 
         window.navigation.setCurrentIndex(0)
@@ -299,28 +299,28 @@ class DesktopTransitionsTest(WorkflowFixture):
         transition = window.page_transition
         self.wait_for(lambda: editor.session.frames and editor.scope is None and not transition.running, "视频预览就绪")
         editor.settings.quality.setValue(27)
-        editor.player_volume.setValue(35)
+        editor.transport.player_volume.setValue(35)
         video = tuple(editor.session.video)
         with patch("frameflow.playback.WaveOutput"):
-            editor.play_button.click()
-            player = editor.playback
+            editor.transport.play_button.click()
+            player = editor.transport.playback
             self.wait_for(lambda: player.started is not None, "视频正在播放")
             window.navigation.setCurrentIndex(0)
             self.wait_for(lambda: 0 < transition.position < .85, "播放中退出预览")
-            self.assertIs(editor.playback, player)
+            self.assertIs(editor.transport.playback, player)
             window.navigation.setCurrentIndex(1)
             self.wait_for(lambda: not transition.running, "反向回到预览")
-            self.assertIs(editor.playback, player)
+            self.assertIs(editor.transport.playback, player)
             window.navigation.setCurrentIndex(0)
             self.wait_for(lambda: not transition.running, "完整退出预览")
-            self.assertIsNone(editor.playback)
+            self.assertIsNone(editor.transport.playback)
         paused_at = editor.cursor.value()
         window.navigation.setCurrentIndex(1)
         self.wait_for(lambda: not transition.running, "重新进入原编辑器")
         self.assertIs(window.pages.currentWidget(), editor)
         self.assertEqual(tuple(editor.session.video), video)
         self.assertEqual(editor.cursor.value(), paused_at)
-        self.assertEqual(editor.player_volume.value(), 35)
+        self.assertEqual(editor.transport.player_volume.value(), 35)
         self.assertEqual(editor.settings.quality.value(), 27)
         self.assertEqual(window._selected().path, self.source)
 

@@ -25,7 +25,7 @@ from .edit_session import EditSession
 from .editing import (Clip, Frames, VideoSource, audio_preview, audio_segment, frame_png, index_frames, length,
                       original_audio, render_edit, render_preview_wav, save_picture, slice_track, splice)
 from .details import DetailsView
-from .editor_controls import _button, _icon_button, _icon_label, _line, _spin, _text, _text_button
+from .editor_controls import _button, _icon_button, _icon_label, _line, _spin, _text, _text_button, timecode as _timecode
 from .editor_settings import ExportSettings
 from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabel, RunStatus,
                              SeekSlider, TransportButton, VideoPreview, VolumePopup)
@@ -42,51 +42,11 @@ from .motion import (Button, Combo, DirectoryPathEdit, Motion, QualityRow, SpinB
                      hide_vertical_scroll_bar)
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
+from .video_transport import VideoTransport
 from .wave_view import WaveView
 
 
 _IMAGE_ENCODERS = {"png", "jpg", "jpeg", "webp", "avif", "tiff", "bmp", "gif_image", "ico", "pdf"}
-
-class FullscreenPlayer(QDialog):
-    def __init__(self, editor):
-        super().__init__(editor, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.editor = editor
-        self.setObjectName("fullscreenPlayer")
-        self.setWindowTitle(editor.path.name)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(editor.player)
-        self.hide_timer = QTimer(self, singleShot=True, interval=2500)
-        self.hide_timer.timeout.connect(lambda: editor.player_controls.hide() if editor.playback else None)
-        for widget in (self, editor.player, editor.frame_view, editor.player_controls,
-                       *editor.player_controls.findChildren(QWidget)):
-            widget.setMouseTracking(True)
-            widget.installEventFilter(self)
-        escape = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
-        escape.activated.connect(self.reject)
-        self.hide_timer.start()
-
-    def eventFilter(self, obj, event):
-        if event.type() in (QEvent.Type.MouseMove, QEvent.Type.Enter, QEvent.Type.MouseButtonPress):
-            self.editor.player_controls.show()
-            self.hide_timer.start()
-        return super().eventFilter(obj, event)
-
-    def done(self, result):
-        self.hide_timer.stop()
-        self.editor.restore_player()
-        super().done(result)
-        self.deleteLater()
-
-
-def _timecode(seconds):
-    seconds = max(0.0, float(seconds or 0))
-    hours, remainder = divmod(seconds, 3600)
-    minutes, remainder = divmod(remainder, 60)
-    if hours:
-        return f"{int(hours)}:{int(minutes):02d}:{remainder:06.3f}"
-    return f"{int(minutes):02d}:{remainder:06.3f}"
-
 
 def _rate_text(bits):
     if not bits:
@@ -125,10 +85,7 @@ class Editor(QDialog):
         self.lookup_media = lookup_media
         if report_missing is not None:
             self.missing_source.connect(report_missing, Qt.ConnectionType.QueuedConnection)
-        self.playback_level = 100
-        self.last_audible_level = 100
-        self.playback_muted = False
-        self.fullscreen_player = None
+        self.transport = None
         self.session = EditSession(path, info)
         self.filmstrip = None
         self.video_range = None
@@ -161,8 +118,6 @@ class Editor(QDialog):
         self.requested_frame = self.shown_frame = self.failed_frame = None
         self.scratch = tempfile.TemporaryDirectory(prefix="frameflow-preview-")
         self.listen_wav = Path(self.scratch.name) / "listen.wav"
-        self.playback = None
-        self.playback_ranges = ()
         self.playing = False
         self.listen_requested = False
         self.audio_clock = None
@@ -177,8 +132,6 @@ class Editor(QDialog):
         self.events.picture_estimate.connect(self._picture_estimated)
         self.seek_timer = QTimer(self, singleShot=True, interval=55)
         self.seek_timer.timeout.connect(self._seek)
-        self.playback_timer = QTimer(self, interval=12, timerType=Qt.TimerType.PreciseTimer)
-        self.playback_timer.timeout.connect(self._playback_tick)
         self.setWindowTitle(f"编辑与预览 · {path.name}")
         self.resize(1010, 740)
         self._build()
@@ -246,112 +199,20 @@ class Editor(QDialog):
     def _build_video_page(self):
         self.video_page, layout = self._page("视频" if self.embedded else "视频帧", "video")
         layout.setContentsMargins(0, 6, 0, 0)
-        self.video_layout = layout
         self.cursor = _spin()
         self.cursor.setSuffix(" 帧")
         self.cursor.setFixedWidth(88)
         self.cursor.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.cursor.valueChanged.connect(self._cursor_changed)
 
-        self.player = QFrame()
-        self.player.setObjectName("videoPlayer")
-        player_layout = QVBoxLayout(self.player)
-        player_layout.setContentsMargins(0, 0, 0, 0)
-        player_layout.setSpacing(0)
-        self.frame_view = self._preview_label(VideoPreview())
-        self.frame_view.setObjectName("videoCanvas")
-        self.frame_view.setMinimumHeight(150)
-        badges = QVBoxLayout(self.frame_view)
-        badges.setContentsMargins(10, 9, 10, 0)
-        player_header = QHBoxLayout()
-        player_header.setSpacing(5)
-        container = self.path.suffix.lstrip(".").upper() or "VIDEO"
-        player_header.addWidget(_text(container, name="playerBadge"))
-        player_header.addWidget(_text(self.info.codec, name="playerBadge"))
-        player_header.addWidget(_text(f"{self.info.width} × {self.info.height}", name="playerBadge"))
-        player_header.addWidget(_text(f"{self.info.fps:g} FPS", name="playerBadge"))
-        player_header.addStretch(1)
-        badges.addLayout(player_header)
-        badges.addStretch(1)
-        player_layout.addWidget(self.frame_view, 1)
-
-        controls = QFrame()
-        controls.setObjectName("playerControls")
-        self.player_controls = controls
-        controls_layout = QHBoxLayout(controls)
-        controls_layout.setContentsMargins(10, 7, 10, 8)
-        controls_layout.setSpacing(6)
-        self.previous_frame_button = TransportButton("previous", "上一帧", self._previous)
-        self.play_button = TransportButton("play", "播放", self._toggle_playback, primary=True)
-        self.play_button.setEnabled(False)
-        self.next_frame_button = TransportButton("next", "下一帧", self._next)
-        for widget in (self.previous_frame_button, self.play_button, self.next_frame_button):
-            widget.setEnabled(False)
-            controls_layout.addWidget(widget)
-        self.player_time_current = _text("00:00.000", name="playerTime")
-        self.player_time_current.setContentsMargins(5, 0, 0, 0)
-        controls_layout.addWidget(self.player_time_current)
-        self.player_time_short = _text("00:00", name="playerTime")
-        self.player_time_short.hide()
-        controls_layout.addWidget(self.player_time_short)
-        self.player_time_separator = _text("/", name="playerTime")
-        controls_layout.addWidget(self.player_time_separator)
-        self.player_time_total = _text("00:00.000", name="playerTime")
-        controls_layout.addWidget(self.player_time_total)
-        self.player_seek = SeekSlider(Qt.Orientation.Horizontal)
-        self.player_seek.setObjectName("playerSeek")
-        self.player_seek.setAccessibleName("视频播放位置")
-        self.player_seek.setRange(1, 1)
-        self.player_seek.setSingleStep(1)
-        self.player_seek.setPageStep(1)
-        self.player_seek.setMinimumWidth(42)
-        self.player_seek.setEnabled(False)
-        self.player_seek.valueChanged.connect(self._seek_from_player)
-        controls_layout.addWidget(self.player_seek, 1)
-        self.volume_button = TransportButton("volume", "静音 / 恢复音量", self._toggle_player_mute)
-        controls_layout.addWidget(self.volume_button)
-        self.volume_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.volume_button.customContextMenuRequested.connect(self._show_player_volume)
-        self.volume_button.installEventFilter(self)
-        self.volume_hide = QTimer(self)
-        self.volume_hide.setSingleShot(True)
-        self.volume_hide.setInterval(260)
-        self.volume_hide.timeout.connect(lambda: self.volume_menu.hide()
-                                         if self.volume_menu.isVisible() else None)
-        self.volume_menu = QMenu(self.volume_button)
-        volume_action = QWidgetAction(self.volume_menu)
-        volume_panel = QWidget()
-        volume_layout = QHBoxLayout(volume_panel)
-        volume_layout.addWidget(_text("音量"))
-        self.player_volume = WheelSlider(Qt.Orientation.Horizontal, wheel_step=5)
-        self.player_volume.setRange(0, 100)
-        self.player_volume.setValue(self.playback_level)
-        self.player_volume.setAccessibleName("播放音量")
-        self.player_volume.setFixedWidth(110)
-        self.player_volume.valueChanged.connect(self._set_player_volume)
-        volume_layout.addWidget(self.player_volume)
-        self.volume_value = _text("100%")
-        self.volume_value.setMinimumWidth(36)
-        volume_layout.addWidget(self.volume_value)
-        volume_action.setDefaultWidget(volume_panel)
-        self.volume_menu.addAction(volume_action)
-        self.volume_options = TransportButton("down", "调整播放音量", self._show_player_volume)
-        self.volume_options.setFixedSize(24, 32)
-        self.volume_options.hide()
-        self.volume_button.setToolTip("")
-        self.volume_popup = VolumePopup(self)
-        self.volume_popup.changed.connect(self._set_player_volume)
-        self.volume_popup.set_level(self.playback_level)
-        self.volume_button.installEventFilter(self)
-        self.volume_popup.installEventFilter(self)
-        self.volume_hide = QTimer(self)
-        self.volume_hide.setSingleShot(True)
-        self.volume_hide.setInterval(250)
-        self.volume_hide.timeout.connect(self._hide_volume_popup)
-        self.fullscreen_button = TransportButton("fullscreen", "全屏", self._toggle_fullscreen)
-        controls_layout.addWidget(self.fullscreen_button)
-        player_layout.addWidget(controls)
-        layout.addWidget(self.player, 1)
+        self.transport = VideoTransport(
+            self, layout, self.cursor, self.session, self.tools, Path(self.scratch.name) / "timeline.wav",
+            ready=self._ready_video, selection=lambda: self.video_selection, before_play=self.stop_audio,
+            suspend_seek=self._suspend_seek, playback_stopped=self._playback_stopped,
+            frame_played=self._video_played, preview_width=self.preview_split.width,
+            notice=self._notice, notice_detail=lambda detail: self.status.setToolTip(detail),
+            clear_status=lambda: self.status.clear(), canvas_for=self._canvas_for,
+        )
 
     def _build_audio_page(self):
         self.audio_page, layout = self._page("音频" if self.embedded and self.video_page else "音轨", "wave")
@@ -739,7 +600,8 @@ class Editor(QDialog):
 
     def _update_timeline_header(self, *_):
         compact = self.preview_split.width() < 415
-        self._fit_player_controls()
+        if self.transport is not None:
+            self.transport.fit_controls()
         if hasattr(self, "timeline_header"):
             direction = (QBoxLayout.Direction.TopToBottom if compact
                          else QBoxLayout.Direction.LeftToRight)
@@ -797,7 +659,7 @@ class Editor(QDialog):
             tab = self.tabs.widget(index)
             color = C.accent.name() if tab is page else icons.INK
             self.tabs.setTabIcon(index, icons.icon(tab.property("mediaIcon"), 18, color, 1.9))
-        self._stop_playback()
+        self._stop_video()
         self._sync_panels()
         if page is self.audio_page:
             if self.frame_scope is not None:
@@ -969,7 +831,7 @@ class Editor(QDialog):
         count = sum(last - first + 1 for first, last in self.video_selection)
         menu = self.frame_context_menu
         menu.clear()
-        menu.addAction("播放选区", self.play_video_selection)
+        menu.addAction("播放选区", self.transport.play_video_selection)
         menu.addSeparator()
         menu.addAction("复制\tCtrl+C", self.copy_video)
         menu.addAction("剪切\tCtrl+X", self.cut_video)
@@ -1043,7 +905,7 @@ class Editor(QDialog):
     def save_video_selection_as(self):
         if not self._ready_video() or not self.video_selection:
             return
-        video, audio = self._video_range_tracks(self.video_selection)
+        video, audio = self.session.tracks_for_selection(self.video_selection)
         fps = self.session.frames.fps
         formats = {
             "MP4 视频 (*.mp4)": ("mp4", "mp4"),
@@ -1089,7 +951,7 @@ class Editor(QDialog):
                   self._saved, exporting=True)
 
     def _locate_frame(self, frame):
-        self._stop_playback()
+        self._stop_video()
         self.cursor.setValue(frame)
 
     def _entered_frame(self):
@@ -1112,7 +974,7 @@ class Editor(QDialog):
     def _run(self, message, worker, on_done, *, exporting=False, on_error=None):
         if self.scope is not None or self.closing:
             return
-        self._stop_playback()
+        self._stop_video()
         self.stop_audio()
         self._notice(message)
         self.progress.setRange(0, 100 if exporting else 0)
@@ -1122,7 +984,7 @@ class Editor(QDialog):
         self.scope = Processes()
         self._update_audio_toolbar()
         if self.filmstrip is not None:
-            self.play_button.setEnabled(False)
+            self.transport.play_button.setEnabled(False)
             self._update_locate_button()
         self.cancel_button.setEnabled(True)
         self.settings.picture_group.setEnabled(False)
@@ -1149,7 +1011,7 @@ class Editor(QDialog):
             if scope.cancelled.is_set():
                 error = "已取消素材插入。"
         if self.filmstrip is not None:
-            self.play_button.setEnabled(self.session.frames is not None)
+            self.transport.play_button.setEnabled(self.session.frames is not None)
             self._update_locate_button()
         self.cancel_button.setEnabled(False)
         self.settings.picture_group.setEnabled(True)
@@ -1204,10 +1066,7 @@ class Editor(QDialog):
 
     def _indexed(self, frames):
         self.session.set_index(frames)
-        self.previous_frame_button.setEnabled(True)
-        self.play_button.setEnabled(True)
-        self.next_frame_button.setEnabled(True)
-        self.player_seek.setEnabled(True)
+        self.transport.enable_indexed_controls()
         self._refresh_video()
         if self.tabs.currentWidget() is self.audio_page:
             self._refresh_audio(reset=True)
@@ -1217,8 +1076,7 @@ class Editor(QDialog):
     def _refresh_video(self):
         count = int(length(self.session.video))
         self.filmstrip.set_track(self.session.video, self.session.frames, self.session.video_sources)
-        with QSignalBlocker(self.player_seek):
-            self.player_seek.setRange(1, count)
+        self.transport.set_range(count)
         with QSignalBlocker(self.video_first), QSignalBlocker(self.video_last):
             for field in (self.video_first, self.video_last):
                 field.setRange(1, count)
@@ -1235,24 +1093,17 @@ class Editor(QDialog):
         self.settings.refresh_estimate()
 
     def _cursor_changed(self, value):
-        self._stop_playback()
+        self._stop_video()
         self._sync_cursor(value)
 
     def _sync_cursor(self, value, *, playing=False):
         if not self.session.frames:
             return
         self.filmstrip.set_current(value, playing=playing)
-        with QSignalBlocker(self.player_seek):
-            self.player_seek.setValue(value)
-        self.player_time_current.setText(_timecode((value - 1) / self.session.frames.fps))
-        self.player_time_short.setText(self.player_time_current.text().split(".")[0])
-        self.player_time_total.setText(_timecode(length(self.session.video) / self.session.frames.fps))
+        fps = self.session.frames.fps
+        self.transport.set_position(value, (value - 1) / fps, length(self.session.video) / fps)
         self._sync_frame_preview(playing=playing)
         self.settings.update_output_location()
-
-    def _seek_from_player(self, value):
-        if self.session.frames is not None and value != self.cursor.value():
-            self.cursor.setValue(value)
 
     def _frame_position(self, value):
         seconds = (value - 1) / self.session.frames.fps
@@ -1267,7 +1118,7 @@ class Editor(QDialog):
         page = self.tabs.currentWidget()
         if self.video_page is not None:
             if page is self.video_page:
-                return self.frame_view
+                return self.transport.frame_view
             if page is self.image_page:
                 return self.image_view
         return None
@@ -1307,7 +1158,7 @@ class Editor(QDialog):
             self.seek_timer.start()
 
     def _seek(self):
-        if (self.closing or self.scope is not None or self.playback is not None
+        if (self.closing or self.scope is not None or (self.transport is not None and self.transport.playback is not None)
                 or (self.embedded and not self.isVisible())
                 or self._frame_preview_panel() is None):
             return
@@ -1342,7 +1193,7 @@ class Editor(QDialog):
             self.frame_cache[frame] = data
             while len(self.frame_cache) > 12:
                 self.frame_cache.popitem(last=False)
-        if self.playback is not None:
+        if self.transport is not None and self.transport.playback is not None:
             return
         panel = self._frame_preview_panel()
         if frame == self.requested_frame and panel is not None:
@@ -1365,206 +1216,24 @@ class Editor(QDialog):
             return self.info.width, self.info.height
         return None
 
-    def _toggle_playback(self):
-        if self.playback is not None:
-            self._stop_playback()
-            self._notice("已暂停。")
-            return
-        if not self._ready_video():
-            return
-        total = int(length(self.session.video))
-        start = self.cursor.value()
-        self._play_video_ranges(((1 if start == total else start, total),))
+    def _stop_video(self):
+        if self.transport is not None:
+            self.transport.stop()
 
-    def eventFilter(self, watched, event):
-        popup = getattr(self, "volume_popup", None)
-        button = getattr(self, "volume_button", None)
-        if popup is None or button is None:
-            return super().eventFilter(watched, event)
-        if watched is button or watched is popup:
-            if event.type() in (QEvent.Type.Enter, QEvent.Type.HoverEnter):
-                self.volume_hide.stop()
-                self._show_volume_popup()
-            elif event.type() == QEvent.Type.Leave:
-                self.volume_hide.start()
-        return super().eventFilter(watched, event)
-
-    def _volume_hovered(self) -> bool:
-        """鼠标是否还落在喇叭按钮或音量面板上（用全局坐标判断）。"""
-        button = getattr(self, "volume_button", None)
-        popup = getattr(self, "volume_popup", None)
-        cursor = QCursor.pos()
-        for widget in (button, popup):
-            if widget is not None and widget.isVisible():
-                if widget.rect().contains(widget.mapFromGlobal(cursor)):
-                    return True
-        return False
-
-    def _finish_volume_hide(self) -> None:
-        if self._volume_hovered():
-            return
-        self._hide_volume_popup()
-
-    def _show_volume_popup(self) -> None:
-        popup = getattr(self, "volume_popup", None)
-        if popup is None:
-            return
-        self.volume_hide.stop()
-        popup.set_level(0 if self.playback_muted else self.playback_level)
-        corner = self.volume_button.mapToGlobal(QPoint(0, 0))
-        x = corner.x() + self.volume_button.width() // 2 - popup.width() // 2
-        y = corner.y() - popup.height() - 6
-        screen = self.screen().availableGeometry()
-        x = max(screen.left() + 4, min(x, screen.right() - popup.width() - 4))
-        if y < screen.top() + 4:
-            y = self.volume_button.mapToGlobal(QPoint(0, self.volume_button.height())).y() + 6
-        popup.move(x, y)
-        popup.show()
-        popup.raise_()
-
-    def _hide_volume_popup(self) -> None:
-        popup = getattr(self, "volume_popup", None)
-        if popup is not None and popup.isVisible():
-            popup.hide()
-
-    def _show_player_volume(self, *_):
-        self._show_volume_popup()
-
-    def _set_player_volume(self, value):
-        self.playback_level = value
-        if value:
-            self.last_audible_level = value
-        self.playback_muted = False
-        with QSignalBlocker(self.player_volume):
-            self.player_volume.setValue(value)
-        self._update_player_volume()
-
-    def _toggle_player_mute(self):
-        if self.playback_level == 0:
-            self.player_volume.setValue(self.last_audible_level)
-        else:
-            self.playback_muted = not self.playback_muted
-            self._update_player_volume()
-
-    def _update_player_volume(self):
-        effective = 0 if self.playback_muted else self.playback_level
-        self.volume_value.setText(f"{effective}%")
-        self.volume_button.setIcon(icons.icon("volume" if effective else "mute", 18, "#FFFFFF", 2))
-        if self.volume_popup.isVisible():
-            self.volume_popup.set_level(effective)
-        if self.playback is not None:
-            self.playback.set_volume(effective / 100)
-
-    def _toggle_fullscreen(self):
-        if self.fullscreen_player is not None:
-            self.fullscreen_player.reject()
-            return
-        self.fullscreen_player = FullscreenPlayer(self)
-        self.fullscreen_button.setIcon(icons.icon("exitFullscreen", 18, "#FFFFFF", 2))
-        self.fullscreen_button.setToolTip("退出全屏（Esc）")
-        self._fit_player_controls()
-        self.fullscreen_player.showFullScreen()
-
-    def restore_player(self):
-        self.fullscreen_player = None
-        self.video_layout.addWidget(self.player, 1)
-        self.player.show()
-        self.player_controls.show()
-        self.fullscreen_button.setIcon(icons.icon("fullscreen", 18, "#FFFFFF", 2))
-        self.fullscreen_button.setToolTip("全屏")
-        self._fit_player_controls()
-
-    def _fit_player_controls(self):
-        if self.video_page is not None and hasattr(self, "fullscreen_button"):
-            room = self.fullscreen_player is not None or self.preview_split.width() >= 445
-            for widget in (self.player_time_current, self.player_time_total, self.player_time_separator):
-                widget.setVisible(room)
-            self.player_time_short.setVisible(not room)
-
-    def play_video_selection(self):
-        if self._ready_video() and self.video_selection:
-            self._play_video_ranges(self.video_selection)
-
-    def _video_range_tracks(self, ranges):
-        video = [clip for first, last in ranges for clip in slice_track(self.session.video, first - 1, last)]
-        if self.session.audio is None:
-            audio = original_audio(video, self.session.frames, self.info.audio_stream)
-        else:
-            fps = self.session.frames.fps
-            audio = [clip for first, last in ranges
-                     for clip in audio_segment(self.session.audio, (first - 1) / fps, last / fps)] if self.session.audio else []
-        return video, audio
-
-    def _play_video_ranges(self, ranges):
-        self._stop_playback()
-        self.stop_audio()
+    def _suspend_seek(self):
         self.seek_timer.stop()
         if self.frame_scope is not None:
             self.frame_scope.cancel()
-        self.playback_ranges = tuple(ranges)
-        video, audio = self._video_range_tracks(self.playback_ranges)
-        self.playback = Playback(video, audio, self.session.frames.fps, self.tools,
-                                 Path(self.scratch.name) / "timeline.wav", canvas=self._canvas_for(video),
-                                 volume=0 if self.playback_muted else self.playback_level / 100)
-        self._notice("正在准备剪辑预览…")
-        self.status.setToolTip("")
-        self._set_transport_playing(True)
-        self.playback_timer.start()
 
-    def _set_transport_playing(self, playing):
-        self.play_button.setIcon(icons.icon("pause" if playing else "play", 18, "#FFFFFF", 2))
-        self.play_button.setAccessibleName("暂停" if playing else "播放")
-        self.play_button.setToolTip("暂停播放" if playing else "从当前帧开始播放剪辑预览")
-        if not playing and self.fullscreen_player is not None:
-            self.player_controls.show()
+    def _playback_stopped(self):
+        if not self.closing:
+            self.shown_frame = self.failed_frame = None
+            self.seek_timer.start()
 
-    def _playback_tick(self):
-        player = self.playback
-        first_frame = player.started is None
-        try:
-            data = player.tick()
-        except (MediaError, OSError) as exc:
-            self._stop_playback()
-            self._notice("播放失败，详情见悬停提示。")
-            self.status.setToolTip(str(exc))
-            return
-        if data is not None:
-            offset = player.position
-            for first, last in self.playback_ranges:
-                count = last - first + 1
-                if offset < count:
-                    number = first + offset
-                    break
-                offset -= count
-            with QSignalBlocker(self.cursor):
-                self.cursor.setValue(number)
-            self._sync_cursor(number, playing=True)
-            self._display(self.frame_view, data)
-            self.shown_frame = self.requested_frame
-            if first_frame:
-                self._notice("音频播放失败，正在播放画面。" if player.audio_error else "正在播放剪辑预览。")
-                self.status.setToolTip(player.audio_error)
-        if player.finished:
-            self._stop_playback()
-            self._notice("播放结束。")
-
-    def _stop_playback(self):
-        if self.playback is not None:
-            self.playback_timer.stop()
-            self.playback.close()
-            self.playback = None
-            self._set_transport_playing(False)
-            self.status.clear()
-            self.status.setToolTip("")
-            if not self.closing:
-                self.shown_frame = self.failed_frame = None
-                self.seek_timer.start()
-
-    def _previous(self):
-        self.cursor.stepDown()
-
-    def _next(self):
-        self.cursor.stepUp()
+    def _video_played(self, number, data):
+        self._sync_cursor(number, playing=True)
+        self._display(self.transport.frame_view, data)
+        self.shown_frame = self.requested_frame
 
     def _ready_video(self):
         return self.session.frames is not None and self.scope is None
@@ -1594,7 +1263,7 @@ class Editor(QDialog):
         if tracks is None:
             self._notice("至少保留一帧。")
             return False
-        self._stop_playback()
+        self._stop_video()
         self.stop_audio()
         self.session.replace_tracks(*tracks)
         self._refresh_video()
@@ -1632,7 +1301,7 @@ class Editor(QDialog):
         if tracks is None:
             return
         count, video, audio = tracks
-        self._stop_playback()
+        self._stop_video()
         self.stop_audio()
         self.session.replace_tracks(video, audio)
         self._refresh_video()
@@ -1679,7 +1348,7 @@ class Editor(QDialog):
         return clip_path, VideoSource(video, frames, path.name)
 
     def _insert_video(self, position, video, audio):
-        self._stop_playback()
+        self._stop_video()
         self.stop_audio()
         self.session.insert_video(position, video, audio)
         self._refresh_video()
@@ -1950,7 +1619,7 @@ class Editor(QDialog):
             self.cancel_operation()
             return
         if self.scope is None and self.session.history:
-            self._stop_playback()
+            self._stop_video()
             self.session.undo()
             if self.session.frames:
                 self._refresh_video()
@@ -2320,9 +1989,9 @@ class Editor(QDialog):
         self.status.setToolTip(str(path))
 
     def suspend(self):
-        if self.fullscreen_player is not None:
-            self.fullscreen_player.reject()
-        self._stop_playback()
+        if self.transport is not None:
+            self.transport.close_fullscreen()
+        self._stop_video()
         self.stop_audio()
         self.seek_timer.stop()
         self.wave_reload.stop()

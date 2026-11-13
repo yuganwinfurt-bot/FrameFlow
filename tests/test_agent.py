@@ -335,16 +335,16 @@ class AgentWorkspaceTest(GuiTestCase):
         self.assertEqual((zoom.value(), strip.zoom), (4, 4))
 
         editor._show_volume_popup()
-        slider = editor.volume_popup.slider
+        slider = editor.transport.volume_popup.slider
         slider.setValue(50)
         self.send_parameter_wheel(slider, angle=120)
-        self.assertEqual((editor.playback_level, editor.player_volume.value()), (55, 55))
-        self.assertEqual(editor.volume_popup.label.text(), "55%")
+        self.assertEqual((editor.transport.playback_level, editor.transport.player_volume.value()), (55, 55))
+        self.assertEqual(editor.transport.volume_popup.label.text(), "55%")
         self.send_parameter_wheel(slider, pixels=-16)
-        self.assertEqual(editor.playback_level, 55)
+        self.assertEqual(editor.transport.playback_level, 55)
         self.send_parameter_wheel(slider, pixels=-16)
-        self.assertEqual(editor.playback_level, 50)
-        self.assertEqual(editor.player_seek.value(), cursor)
+        self.assertEqual(editor.transport.playback_level, 50)
+        self.assertEqual(editor.transport.player_seek.value(), cursor)
 
     def test_wheel_leaves_model_and_native_dialog_fields_unchanged(self):
         self.nav(2)
@@ -557,12 +557,12 @@ class AgentWorkspaceTest(GuiTestCase):
         self.assertIs(window.pages.currentWidget(), editor)
         self.assertEqual(editor.cursor.value(), 12)
 
-        editor._toggle_playback()
-        self.wait(lambda: editor.playback is not None)
+        editor.transport.toggle()
+        self.wait(lambda: editor.transport.playback is not None)
         self.nav(2)
         self.settle()
         paused_frame = editor.cursor.value()
-        self.assertIsNone(editor.playback)
+        self.assertIsNone(editor.transport.playback)
         self.nav(1)
         self.settle()
         self.assertIs(window.pages.currentWidget(), editor)

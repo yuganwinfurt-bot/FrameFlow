@@ -37,43 +37,43 @@ class EditorPlaybackTest(WorkflowFixture):
         editor.video_last.setValue(7)
         editor.delete_video()
         self.assertEqual([(clip.start, clip.end) for clip in editor.session.video], [(0, 2), (7, 58)])
-        old_preview = editor.frame_view.original.cacheKey()
+        old_preview = editor.transport.frame_view.original.cacheKey()
         sound = patch("frameflow.playback.WaveOutput") if sys.platform == "win32" else nullcontext()
         with sound as output:
-            QTest.mouseClick(editor.play_button, Qt.MouseButton.LeftButton)
-            player = editor.playback
+            QTest.mouseClick(editor.transport.play_button, Qt.MouseButton.LeftButton)
+            player = editor.transport.playback
             self.wait_for(lambda: editor.cursor.value() >= 5, "播放跨过已剪掉的区间")
             self.assertEqual(editor.shown_frame, (self.source, editor.cursor.value() + 4))
-            self.assertNotEqual(editor.frame_view.original.cacheKey(), old_preview)
+            self.assertNotEqual(editor.transport.frame_view.original.cacheKey(), old_preview)
             if output is not None:
                 output.assert_called_once_with(player.wav)
-                editor.player_volume.setValue(35)
+                editor.transport.player_volume.setValue(35)
                 self.assertEqual(player.volume, .35)
-                editor.volume_button.click()
+                editor.transport.volume_button.click()
                 self.assertEqual(player.volume, 0)
-                editor.volume_button.click()
+                editor.transport.volume_button.click()
                 self.assertEqual(player.volume, .35)
                 with wave.open(str(player.wav), "rb") as audio:
                     self.assertAlmostEqual(audio.getnframes() / audio.getframerate(), 53 / 24, delta=0.01)
-            editor.fullscreen_button.click()
-            self.assertTrue(editor.fullscreen_player.isFullScreen())
-            QTest.keyClick(editor.fullscreen_player, Qt.Key.Key_Escape)
-            self.assertIsNone(editor.fullscreen_player)
-            self.assertIs(editor.playback, player)
-            QTest.mouseClick(editor.play_button, Qt.MouseButton.LeftButton)
+            editor.transport.fullscreen_button.click()
+            self.assertTrue(editor.transport.fullscreen_player.isFullScreen())
+            QTest.keyClick(editor.transport.fullscreen_player, Qt.Key.Key_Escape)
+            self.assertIsNone(editor.transport.fullscreen_player)
+            self.assertIs(editor.transport.playback, player)
+            QTest.mouseClick(editor.transport.play_button, Qt.MouseButton.LeftButton)
             paused = editor.cursor.value()
             QTest.qWait(120)
             self.assertEqual(editor.cursor.value(), paused)
             self.assertTrue(player.video_task.done())
-            QTest.mouseClick(editor.play_button, Qt.MouseButton.LeftButton)
-            self.wait_for(lambda: editor.playback is None, "播放到时间线末尾")
+            QTest.mouseClick(editor.transport.play_button, Qt.MouseButton.LeftButton)
+            self.wait_for(lambda: editor.transport.playback is None, "播放到时间线末尾")
             self.assertEqual(editor.cursor.value(), 53)
             self.assertEqual(editor.status.text(), "播放结束。")
-            QTest.mouseClick(editor.play_button, Qt.MouseButton.LeftButton)
-            restarted = editor.playback
+            QTest.mouseClick(editor.transport.play_button, Qt.MouseButton.LeftButton)
+            restarted = editor.transport.playback
             self.wait_for(lambda: editor.cursor.value() < paused, "末尾播放时回到开头")
             editor.close()
-            self.assertIsNone(editor.playback)
+            self.assertIsNone(editor.transport.playback)
             self.assertTrue(restarted.video_task.done())
             self.assertFalse(Path(editor.scratch.name).exists())
 
@@ -90,10 +90,10 @@ class EditorPlaybackTest(WorkflowFixture):
         last = editor.session.frames.count
         editor.video_selection = ((3, 7), (12, 15), (last - 5, last))
         with patch("frameflow.playback.WaveOutput"):
-            editor.play_video_selection()
-            player = editor.playback
+            editor.transport.play_video_selection()
+            player = editor.transport.playback
             self.assertEqual(player.count, 15)
-            self.wait_for(lambda: editor.playback is None, "不连续选区播完")
+            self.wait_for(lambda: editor.transport.playback is None, "不连续选区播完")
             self.assertEqual(editor.cursor.value(), last)
             self.assertEqual(editor.status.text(), "播放结束。")
             self.assertFalse(player.audio_error)
@@ -111,7 +111,7 @@ class EditorPlaybackTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
         self.wait_for(lambda: editor.shown_frame == (self.source, 0), "首帧")
-        view = editor.frame_view
+        view = editor.transport.frame_view
         original_image = view.original.cacheKey()
         original_rect = view.geometry()
         original_timeline = editor.timeline.geometry()
@@ -324,11 +324,11 @@ class EditorPlaybackTest(WorkflowFixture):
         self.wait_for(lambda: editor.session.frames and editor.scope is None, "播放器和媒体信息")
         self.app.processEvents()
 
-        self.assertTrue(editor.player.isVisible())
-        self.assertTrue(editor.player_seek.isVisible())
-        self.assertEqual(editor.player_seek.minimum(), 1)
-        self.assertEqual(editor.player_seek.maximum(), editor.session.frames.count)
-        self.assertEqual(editor.player_seek.value(), editor.cursor.value())
+        self.assertTrue(editor.transport.widget.isVisible())
+        self.assertTrue(editor.transport.player_seek.isVisible())
+        self.assertEqual(editor.transport.player_seek.minimum(), 1)
+        self.assertEqual(editor.transport.player_seek.maximum(), editor.session.frames.count)
+        self.assertEqual(editor.transport.player_seek.value(), editor.cursor.value())
         self.assertTrue(editor.media_summary.isVisible())
         values = [label.text() for label in editor.media_summary.findChildren(QLabel)]
         joined = " ".join(values)
@@ -350,11 +350,11 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertTrue(editor.selection_label.isVisible())
         self.assertTrue(editor.settings.export_group.isVisible())
 
-        editor.player_seek.setValue(9)
+        editor.transport.player_seek.setValue(9)
         self.assertEqual(editor.cursor.value(), 9)
-        self.assertEqual(editor.player_time_current.text(), "00:00.333")
-        QTest.mouseClick(editor.player_seek, Qt.MouseButton.LeftButton,
-                         pos=QPoint(editor.player_seek.width() - 2, editor.player_seek.height() // 2))
+        self.assertEqual(editor.transport.player_time_current.text(), "00:00.333")
+        QTest.mouseClick(editor.transport.player_seek, Qt.MouseButton.LeftButton,
+                         pos=QPoint(editor.transport.player_seek.width() - 2, editor.transport.player_seek.height() // 2))
         self.assertEqual(editor.cursor.value(), editor.session.frames.count)
         editor.cursor.setValue(2)
         editor._use_current_frame(editor.video_first)

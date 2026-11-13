@@ -464,8 +464,8 @@ class DesktopQueueTest(WorkflowFixture):
         self.assertEqual(length(editor.session.video), total)
         self.assertFalse(any(clip.path == video for clip in editor.session.audio_track()))
         with patch("winsound.PlaySound") if sys.platform == "win32" else nullcontext():
-            editor._play_video_ranges(((1, 6),))
-            self.wait_for(lambda: editor.playback is None, "混合来源帧连续播放")
+            editor.transport._play_video_ranges(((1, 6),))
+            self.wait_for(lambda: editor.transport.playback is None, "混合来源帧连续播放")
             self.assertEqual(editor.status.text(), "播放结束。")
 
         editor.tabs.setCurrentWidget(editor.audio_page)

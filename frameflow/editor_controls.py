@@ -74,3 +74,12 @@ def _spin(*, seconds=False):
         field.setSingleStep(.1)
         field.setSuffix(" 秒")
     return field
+
+
+def timecode(seconds):
+    seconds = max(0.0, float(seconds or 0))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, remainder = divmod(remainder, 60)
+    if hours:
+        return f"{int(hours)}:{int(minutes):02d}:{remainder:06.3f}"
+    return f"{int(minutes):02d}:{remainder:06.3f}"

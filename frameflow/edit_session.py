@@ -81,6 +81,15 @@ class EditSession:
                  else audio_segment(track, first / fps, last / fps))
         return video, audio
 
+    def tracks_for_selection(self, ranges):
+        video = [clip for first, last in ranges for clip in slice_track(self.video, first - 1, last)]
+        if self.audio is None:
+            return video, original_audio(video, self.frames, self.info.audio_stream)
+        fps = self.frames.fps
+        audio = [clip for first, last in ranges
+                 for clip in audio_segment(self.audio, (first - 1) / fps, last / fps)] if self.audio else []
+        return video, audio
+
     def set_audio_clipboard(self, video, audio):
         self.audio_clipboard_video, self.audio_clipboard = video, audio
 

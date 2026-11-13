@@ -984,8 +984,8 @@ class MainWindow(QMainWindow):
             if data and pixmap.loadFromData(data):
                 job.picture = pixmap
                 editor = self.editors.get(key)
-                if editor and isinstance(job.info, VideoInfo) and editor.frame_view.original is None:
-                    editor.frame_view.set_picture(pixmap)
+                if editor and editor.transport is not None:
+                    editor.transport.offer_thumbnail(pixmap)
                 self._update_preview_item(job)
             self._update_job(job)
 
@@ -1261,8 +1261,8 @@ class MainWindow(QMainWindow):
         editor.set_output_format(job.output_format)
         if job.output_format:
             editor.apply_output_options(self._job_export(job), apply_image_quality=job.export_settings is not None)
-        if isinstance(job.info, VideoInfo) and job.picture is not None:
-            editor.frame_view.set_picture(job.picture)
+        if editor.transport is not None and job.picture is not None:
+            editor.transport.offer_thumbnail(job.picture)
         editor.saved.connect(self._register_editor_output)
         editor.return_requested.connect(self._show_conversion)
         editor.task_changed.connect(lambda: self._refresh_preview_footer(editor))
