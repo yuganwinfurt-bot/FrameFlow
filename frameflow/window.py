@@ -15,60 +15,38 @@ from PySide6.QtCore import (QEvent, QItemSelectionModel, QModelIndex, QObject, Q
                             QSignalBlocker, QSize, Qt, QUrl, Signal, Slot)
 from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
+    QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QProgressBar, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QProgressBar, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from .agent import AgentSession
 from .conversion_batch import BatchTask, inspect_media, run_batch
+from .batch_settings import AUDIO_FORMATS, IMAGE_FORMATS, VIDEO_FORMATS, BatchSettings, formats_for
+from .conversion_inspector import ConversionInspector, icon_label
 from .agent_tools import AgentTools
 from .agent_ui import AgentPage, Attachment
-from .media import (AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, LOSSLESS_AUDIO_FORMATS, VIDEO_EXTENSIONS,
-                    VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS, WAVEFORM_SECONDS)
+from .media import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from .media import AudioInfo, ImageInfo, VideoInfo
-from .icons import INK, icon as line_icon, pixmap as line_pixmap
+from .icons import icon as line_icon
 from .media import (Export, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
-from .media import filename_problem, media_path_missing, output_extension
+from .media import filename_problem, media_path_missing
 from .details import DetailsDialog
-from .motion import (Button, Combo, DirectoryButton, DropArea, Motion,
-                     NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar,
+from .motion import (Button, Combo, DropArea, Motion,
+                     NavigationBar, PageTransition, hide_vertical_scroll_bar,
                      install_parameter_wheel_policy, local_files)
 from .editor import Editor
 from .media_text import file_size, metadata, rail_meta
 from .queue_state import Job, QueueState
 from .queue_view import (ROW_HEIGHT, THUMB_SIZE, BatchFormatMenu, MediaQueue, QueueColumns,
-                         QueueDelegate, Row, StatusPill, queue_thumbnail, state_tone)
+                         QueueDelegate, Row, queue_thumbnail)
 from .theme import STYLE, app_icon, brand_mark, shadow
-from .widgets import ElidedLabel, fit_pixmap, label
+from .widgets import ElidedLabel, label
 
 RAIL_MIN_WIDTH = 232
 CONVERSION_FOOTER_HEIGHT = 65
 PREVIEW_FOOTER_HEIGHT = 56
-
-VIDEO_FORMATS = (("mp4", "MP4 · H.264"), ("mp4_hevc", "MP4 · H.265"),
-                 ("mkv_hevc", "MKV · H.265"), ("mkv", "MKV · H.264"),
-                 ("webm", "WebM · VP9"), ("mov", "MOV · H.264"), ("avi", "AVI · MPEG-4"), ("gif", "GIF · 动图"))
-AUDIO_FORMATS = (("mp3", "MP3"), ("m4a", "M4A · AAC"), ("wav", "WAV · PCM"),
-                 ("flac", "FLAC · 无损"), ("opus", "Opus"), ("ogg", "OGG · Vorbis"))
-IMAGE_FORMATS = (("png", "PNG · 无损"), ("jpg", "JPEG · 照片"), ("webp", "WebP"), ("avif", "AVIF"),
-                 ("tiff", "TIFF"), ("bmp", "BMP"), ("gif_image", "GIF · 静态"), ("ico", "ICO · 图标"), ("pdf", "PDF · 单页"))
-RESIZABLE_FORMATS = {key for key, _ in VIDEO_FORMATS + IMAGE_FORMATS}
-FRAME_RATE_FORMATS = {key for key, _ in VIDEO_FORMATS if key != "gif"}
-
-
-def formats_for(info: MediaInfo | None):
-    if isinstance(info, VideoInfo):
-        if info.audio_stream is not None:
-            return VIDEO_FORMATS + tuple((key, f"提取音频 · {key.upper()}") for key, _ in AUDIO_FORMATS)
-        return VIDEO_FORMATS
-    if isinstance(info, AudioInfo):
-        return AUDIO_FORMATS
-    if isinstance(info, ImageInfo) and info.codec != "PDF":
-        return IMAGE_FORMATS
-    return ()
-
 
 class Events(QObject):
     inspected = Signal(str, object, str)
@@ -79,44 +57,6 @@ class Events(QObject):
     completed = Signal(bool)
 
 
-def icon_label(name: str, size: int = 16):
-    """占位用的线框图标（不带交互）。"""
-    widget = QLabel()
-    widget.setObjectName("lineIcon")
-    widget.setFixedSize(size, size)
-
-    widget.setPixmap(line_pixmap(name, size, INK))
-    return widget
-
-
-def icon_button(name: str, callback, tooltip: str = "", size: int = 17):
-    """只有图标的扁平按钮，尺寸和普通按钮的内边距对齐。"""
-    button = Button("")
-    button.setProperty("flat", True)
-    button.setProperty("iconOnly", True)
-    button.setFixedSize(28, 28)
-    button.setIcon(line_icon(name, size))
-    button.setIconSize(QSize(size, size))
-    button.setToolTip(tooltip)
-    button.clicked.connect(callback)
-    return button
-
-
-def field(title: str, widget):
-    """带小标题的控件单元格：标题在上、控件在下，两列并排时不显得拥挤。"""
-    holder = QWidget()
-    holder.setObjectName("fieldCell")
-    layout = QVBoxLayout(holder)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(4)
-    caption = QLabel(title)
-    caption.setObjectName("fieldLabel")
-    layout.addWidget(caption)
-    layout.addWidget(widget)
-    holder.field_label = caption
-    return holder
-
-
 def card() -> tuple[QFrame, QVBoxLayout]:
     """白底细边框的圆角卡片，主窗口两块内容区都用它。"""
     frame = QFrame()
@@ -125,12 +65,6 @@ def card() -> tuple[QFrame, QVBoxLayout]:
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
     return frame, layout
-
-
-def section(text: str) -> QLabel:
-    widget = label(text)
-    widget.setObjectName("sectionTitle")
-    return widget
 
 
 def divider() -> QFrame:
@@ -195,7 +129,6 @@ class MainWindow(QMainWindow):
         self.editors: dict[str, Editor] = {}
         self.mounted_editor: Editor | None = None
         self.details_dialog: DetailsDialog | None = None
-        self.output_directory: Path | None = None
         self.scope: Processes | None = None
         self.batch_keys = ()
         self.inspections = Processes()
@@ -318,232 +251,16 @@ class MainWindow(QMainWindow):
         self.list.installEventFilter(self)
         self.preview_files.installEventFilter(self)
 
-        inspector, right = card()
-        inspector.setObjectName("conversionInspector")
-        shadow(inspector)
-        body = QWidget()
-        body.setObjectName("inspectorBody")
-        panel_layout = QVBoxLayout(body)
-        panel_layout.setContentsMargins(12, 9, 12, 8)
-        panel_layout.setSpacing(5)
-        scroll = QScrollArea()
-        scroll.setObjectName("inspectorScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        hide_vertical_scroll_bar(scroll)
-        scroll.setWidget(body)
-        body.setMinimumWidth(1)
-        scroll.viewport().setAutoFillBackground(False)
-        scroll.viewport().setObjectName("exportViewport")
-        right.addWidget(scroll, 1)
-        self.inspector_scroll = scroll
-
-        # 模块 A：选中文件概览——缩略图、文件名、一行参数，把高度留给下面的操作
-        self.preview = label("添加文件后可在此预览")
-        self.preview.setObjectName("preview")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setFixedSize(68, 50)
-        source_summary = QHBoxLayout()
-        source_summary.setSpacing(8)
-        source_summary.addWidget(self.preview)
-        source_meta = QVBoxLayout()
-        source_meta.setSpacing(2)
-        name_row = QHBoxLayout()
-        name_row.setSpacing(6)
-        self.video_name = ElidedLabel("尚未选择文件", mode=Qt.TextElideMode.ElideMiddle)
-        self.video_name.setObjectName("inspectorName")
-        name_row.addWidget(self.video_name, 1)
-        self.inspector_pill = StatusPill()
-        self.inspector_pill.hide()
-        name_row.addWidget(self.inspector_pill)
-        source_meta.addLayout(name_row)
-        self.video_info = label("选中队列里的文件后，这里会显示缩略图和媒体参数。", muted=True)
-        self.video_info.setObjectName("inspectorMeta")
-        self.video_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.video_info.setWordWrap(False)
-        source_meta.addWidget(self.video_info)
-        source_summary.addLayout(source_meta, 1)
-        panel_layout.addLayout(source_summary)
-        settings_heading = QHBoxLayout()
-        settings_heading.setSpacing(7)
-        settings_heading.addWidget(icon_label("gear", 18))
-        heading = label("输出设置")
-        heading.setObjectName("conversionSettingsHeading")
-        settings_heading.addWidget(heading, 1)
-        panel_layout.addLayout(settings_heading)
-        self.shared_settings = QVBoxLayout()
-        self.shared_settings.setContentsMargins(0, 0, 0, 0)
-        panel_layout.addLayout(self.shared_settings)
-
-        self.batch_settings_dialog = QDialog(self)
-        self.batch_settings_dialog.setWindowTitle("批量输出参数")
-        self.batch_settings_dialog.setMinimumWidth(390)
-        batch_body = QVBoxLayout(self.batch_settings_dialog)
-        batch_body.addWidget(label("将下面的通用参数应用到队列中所有兼容文件。", muted=True))
-
-        # 模块 B：参数分组，两列并排，默认尺寸下不需要滚动
-        fields = QGridLayout()
-        fields.setHorizontalSpacing(10)
-        fields.setVerticalSpacing(8)
-        fields.setColumnStretch(0, 1)
-        fields.setColumnStretch(1, 1)
-
-        self.resolution = Combo()
-        self.resolution.addItem("原始尺寸", 0)
-        for title, edge in VIDEO_RESOLUTIONS:
-            self.resolution.addItem(title, edge)
-        for edge in (480, 256):
-            self.resolution.addItem(f"最长边 {edge} px", edge)
-        self.resolution.addItem("自定义最长边…", -1)
-        self.max_edge = 0
-        self.resolution.activated.connect(self._choose_resolution)
-        self.resolution.setToolTip("分辨率预设以标准横屏尺寸为参考，按原画面比例缩放。")
-        self.output_stem_label = QLabel("输出文件名")
-        self.output_stem_label.setObjectName("fieldLabel")
-        self.output_stem_row = QWidget()
-        stem_layout = QHBoxLayout(self.output_stem_row)
-        stem_layout.setContentsMargins(0, 0, 0, 0)
-        stem_layout.setSpacing(6)
-        self.output_stem_edit = QLineEdit()
-        self.output_stem_edit.setPlaceholderText("输出文件名")
-        self.output_stem_edit.setMinimumHeight(30)
-        self.output_stem_edit.textEdited.connect(self._output_stem_edited)
-        stem_layout.addWidget(self.output_stem_edit, 1)
-        self.output_stem_ext = QLabel("")
-        self.output_stem_ext.setObjectName("outputStemExt")
-        self.output_stem_ext.setMinimumWidth(42)
-        stem_layout.addWidget(self.output_stem_ext)
-        self.resolution_field = field("分辨率", self.resolution)
-        fields.addWidget(self.resolution_field, 0, 0)
-
-        self.output_fps = Combo()
-        self.output_fps.addItem("保持原帧率", 0)
-        for rate in VIDEO_FRAME_RATES:
-            self.output_fps.addItem(f"{rate} FPS", rate)
-        self.output_fps.setToolTip("适用于队列中的视频输出，保持播放速度。GIF 帧率由 GIF 设置控制。")
-        self.output_fps_field = field("输出帧率", self.output_fps)
-        fields.addWidget(self.output_fps_field, 0, 1)
-
-        self.acceleration = Combo()
-        self.acceleration.setAccessibleName("视频编码加速")
-        self.acceleration.setToolTip("只列出当前 FFmpeg 构建支持的硬件编码器；其他格式使用 CPU 软件编码。")
-        self.acceleration_field = field("视频编码加速", self.acceleration)
-        fields.addWidget(self.acceleration_field, 1, 0)
-
-        self.target_size = SpinBox()
-        self.target_size.setRange(0, 10_000_000)
-        self.target_size.setSingleStep(100)
-        self.target_size.setSuffix(" KB")
-        self.target_size.setSpecialValueText("不限")
-        self.target_size.setMinimumHeight(28)
-        self.target_size.setToolTip("每个输出文件的体积目标。动图和图片可能缩小尺寸。WAV 和 FLAC 按原音质导出。")
-        self.target_size_field = field("目标体积", self.target_size)
-        fields.addWidget(self.target_size_field, 1, 1)
-
-        self.gif_preset = Combo()
-        self.gif_preset.addItem("小体积 · 8 FPS", True)
-        self.gif_preset.addItem("清晰 · 12 FPS", False)
-        self.gif_preset.setToolTip("选择动图的帧率和默认尺寸。也可在分辨率里指定最长边。")
-        self.gif_preset_label = label("GIF 设置")
-        self.gif_field = field("GIF 设置", self.gif_preset)
-        fields.addWidget(self.gif_field, 2, 0, 1, 2)
-
-        self.quality = QualityRow("质量微调", 18, 34, 23,
-                                  hint="CRF 越小画质越高，文件通常越大。",
-                                  icon_name="sliders")
-        self.quality.changed.connect(self._quality_changed)
-        self.quality.settled.connect(self._quality_changed)
-        self.quality.setToolTip("CRF 越小越清晰、文件越大；22–26 是日常分享的常用区间。\n"
-                                "设了「目标体积」时以体积优先，CRF 只作为起点。")
-        fields.addWidget(self.quality, 3, 0, 1, 2)
-        batch_body.addLayout(fields)
-
-        # 模块 C：输出文件——文件名一行，目录一行
-        self.output_location = QWidget()
-        self.output_location.setObjectName("outputLocationGroup")
-        output_layout = QVBoxLayout(self.output_location)
-        output_layout.setContentsMargins(0, 0, 0, 0)
-        output_layout.setSpacing(6)
-        output_heading = QHBoxLayout()
-        output_heading.setSpacing(6)
-        output_heading.addWidget(section("输出文件"))
-        output_heading.addStretch(1)
-        self.reset_destination = Button("恢复源目录")
-        self.reset_destination.setProperty("flat", True)
-        self.reset_destination.clicked.connect(self._reset_directory)
-        output_heading.addWidget(self.reset_destination)
-        output_layout.addLayout(output_heading)
-        self.output_name = ElidedLabel("添加文件后显示输出文件名", mode=Qt.TextElideMode.ElideMiddle)
-        self.output_name.setObjectName("outputFileName")
-        self.output_name.setProperty("muted", True)
-        name_card = QFrame()
-        name_card.setObjectName("outputLocationCard")
-        name_row = QHBoxLayout(name_card)
-        name_row.setContentsMargins(9, 4, 5, 4)
-        name_row.setSpacing(6)
-        folder_icon = icon_label("folder", 18)
-        folder_icon.setFixedSize(28, 28)
-        folder_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        name_row.addWidget(folder_icon)
-        self.destination = DirectoryButton("默认使用各文件的源目录")
-        self.destination.setObjectName("outputPath")
-        self.destination.setProperty("flat", True)
-        self.destination.clicked.connect(self._choose_directory)
-        name_row.addWidget(self.destination, 1)
-        self.pick_button = icon_button("folder", self._choose_directory, "选择输出文件夹")
-        name_row.addWidget(self.pick_button)
-        output_layout.addWidget(name_card)
-        stem_head = QHBoxLayout()
-        stem_head.setSpacing(6)
-        stem_head.addWidget(self.output_stem_label)
-        stem_head.addStretch(1)
-        output_layout.addLayout(stem_head)
-        output_layout.addWidget(self.output_stem_row)
-        batch_body.addWidget(self.output_location)
-        apply_batch = Button("应用到队列")
-        apply_batch.setObjectName("primary")
-        apply_batch.clicked.connect(self._apply_batch_settings)
-        batch_body.addWidget(apply_batch)
-
-        self.details_button = Button("详情")
-        self.details_button.setIcon(line_icon("file", 15))
-        self.details_button.setIconSize(QSize(15, 15))
-        self.details_button.setToolTip("在新窗口里查看完整路径和全部媒体参数")
-        self.details_button.clicked.connect(self._show_details)
-        panel_layout.addStretch()
-
-        # 操作区固定在卡片底部，展开文件详情时不会被顶到滚动视口之外。
-        actions = QFrame()
-        actions.setObjectName("inspectorActions")
-        action_layout = QVBoxLayout(actions)
-        action_layout.setContentsMargins(12, 5, 12, 7)
-        action_layout.setSpacing(5)
-
-        self.edit_button = Button("编辑 / 预览")
-        self.edit_button.setObjectName("primary")
-        self.edit_button.clicked.connect(self._edit_selected)
-        self.queue_result_button = Button("加入下一轮转换")
-        self.queue_result_button.clicked.connect(self._queue_selected)
-        self.error_button = Button("查看错误详情")
-        self.error_button.clicked.connect(self._show_error)
-        self.locate_button = Button("定位文件")
-        self.locate_button.clicked.connect(self._locate_output)
-        action_layout.addWidget(self.queue_result_button)
-        action_layout.addWidget(self.error_button)
-        output_actions = QHBoxLayout()
-        output_actions.setSpacing(5)
-        output_actions.addWidget(self.edit_button, 2)
-        output_actions.addWidget(self.details_button, 1)
-        output_actions.addWidget(self.locate_button, 1)
-        action_layout.addLayout(output_actions)
-        right.addWidget(actions)
-
-        self.inspector = inspector
-        inspector.setFixedWidth(self._settings_width())
-        inspector.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.inspector = ConversionInspector(show_details=self._show_details, edit=self._edit_selected,
+                                             queue=self._queue_selected, show_error=self._show_error,
+                                             locate=self._locate_output)
+        self.inspector.setFixedWidth(self._settings_width())
+        self.batch_settings = BatchSettings(self, self.tools.ffmpeg if self.tools else None, self._selected)
+        self.batch_settings.name_edited.connect(self._output_stem_edited)
+        self.batch_settings.quality_changed.connect(self._quality_changed)
+        self.batch_settings.directory_changed.connect(self._batch_directory_changed)
         self.page_transition = PageTransition(
-            self.page_host, queue, self.preview_rail, inspector, self.pages, self._rail_width(), self.agent_page)
+            self.page_host, queue, self.preview_rail, self.inspector, self.pages, self._rail_width(), self.agent_page)
         self.page_transition.queue_columns_progress.connect(self.column_header.set_detail)
         self.page_transition.queue_columns_progress.connect(self.rail_column_header.set_detail)
         self.page_transition.settings_location_changed.connect(self._move_page_settings)
@@ -684,18 +401,6 @@ class MainWindow(QMainWindow):
             self, "关于帧转 FrameFlow",
             "<b>帧转 FrameFlow</b><br>本地视频、音频、图片格式转换与轻量编辑。<br><br>"
             "转换由本地 FFmpeg 完成。AI Agent 仅在配置后向指定模型发送对话及相关元数据。")
-
-    def _choose_resolution(self, index):
-        edge = self.resolution.itemData(index)
-        if edge == -1:
-            edge, ok = QInputDialog.getInt(self, "自定义分辨率", "最长边（像素）",
-                                           self.max_edge or 1920, 16, 8192)
-            if not ok:
-                edge = self.max_edge
-            if self.resolution.findData(edge) < 0:
-                self.resolution.insertItem(self.resolution.count() - 1, f"最长边 {edge} px", edge)
-            self.resolution.setCurrentIndex(self.resolution.findData(edge))
-        self.max_edge = edge
 
     @Slot(str, str)
     def _set_format(self, key, kind):
@@ -1010,9 +715,6 @@ class MainWindow(QMainWindow):
         if self.navigation.currentIndex() == 1:
             self._show_page(self._editor_for(selected) or self.empty_preview)
 
-    def _job_extension(self, job) -> str:
-        return output_extension(job.output_format or "mp4")
-
     def _output_stem_edited(self, text: str) -> None:
         if job := self._selected():
             self._set_output_stem(job, text)
@@ -1024,71 +726,16 @@ class MainWindow(QMainWindow):
                 editor.settings.output_stem_edit.setText(text)
             editor.settings.update_output_location()
         if self._selected() is job:
-            if self.output_stem_edit.text() != text:
-                self.output_stem_edit.setText(text)
-            self._refresh_output_name_preview(job)
-
-    def _refresh_output_name_preview(self, job) -> None:
-        ext = self._job_extension(job)
-        self.output_stem_ext.setText(f".{ext}")
-        stem = job.output_stem or job.path.stem
-        directory = self.output_directory or job.path.parent
-        name = f"{stem}.{ext}"
-        target = directory / name
-        self.output_stem_edit.setToolTip(str(target))
-        self.output_name.set_full_text(name)
-        self.output_name.setToolTip(str(target))
+            if self.batch_settings.output_stem_edit.text() != text:
+                self.batch_settings.output_stem_edit.setText(text)
+            self.batch_settings.refresh_name(job)
 
     def _show_selected(self) -> None:
         job = self._selected()
-        directory = self.output_directory or (job.path.parent if job else None)
-        self.destination.set_path(str(directory) if directory else "默认使用各文件的源目录")
-        if job and job.output:
-            output_name = job.output.name
-        elif job and job.output_format:
-            output_name = f"{job.output_stem or job.path.stem}.{self._job_extension(job)}"
-        else:
-            output_name = "选择文件并设置格式后显示输出文件名"
-        self.output_stem_edit.blockSignals(True)
-        self.output_stem_edit.setText((job.output_stem or job.path.stem) if job else "")
-        self.output_stem_edit.blockSignals(False)
-        self.output_stem_ext.setText(f".{self._job_extension(job)}" if job and job.output_format else "")
-        self.output_name.set_full_text(output_name)
-        self.output_name.setToolTip(
-            str(job.output) if job and job.output else
-            str(directory / output_name) if directory and job and job.output_format else output_name
-        )
-        audio = job is not None and isinstance(job.info, AudioInfo)
-        self.video_name.set_full_text(job.path.name if job else "尚未选择文件")
-        if job and job.picture is not None:
-            self.preview.setPixmap(fit_pixmap(job.picture, self.preview.size()))
-        else:
-            self.preview.setText(("暂无波形" if audio else "暂无缩略图") if job else "添加文件后可在此预览")
-        if job and job.info:
-            details = [f"{metadata(job.info)}  ·  {file_size(job.info.size)}"]
-            if audio and job.info.duration > WAVEFORM_SECONDS:
-                details.append(f"波形显示前 {WAVEFORM_SECONDS} 秒")
-            if job.output and job.output != job.path:
-                details.append(f"输出 {job.output.name}")
-                if job.output_info:
-                    details.append(f"{metadata(job.output_info)}  ·  {file_size(job.output_info.size)}")
-                if job.output_note:
-                    details.append(job.output_note)
-            self.video_info.setText(" · ".join(details))
-        elif job:
-            self.video_info.setText("读取失败，请查看错误详情。" if job.detail else "正在读取媒体信息…")
-        else:
-            self.video_info.setText("在这里查看缩略图、波形和文件信息。")
-        if job and job.info:
-            self.inspector_pill.set_state(job.state, state_tone(job))
-            self.inspector_pill.show()
-        else:
-            self.inspector_pill.hide()
+        self.batch_settings.show_selection(job)
+        self.inspector.show_source(job)
         if not self.page_transition.settings_in_preview:
             self._mount_selected_settings(job)
-        self.details_button.setEnabled(bool(job and job.info))
-        self.details_button.setToolTip(
-            "在新窗口里查看完整路径和全部媒体参数" if job and job.info else "先选择一个文件")
 
     def _details_extra(self, job):
         if not (job.output and job.output != job.path and job.output_info):
@@ -1121,7 +768,7 @@ class MainWindow(QMainWindow):
                 editor.settings.refresh_density()
             self.page_transition.rail_width = self._rail_width()
             self.page_transition.invalidate()
-        if hasattr(self, "preview"):
+        if hasattr(self, "page_transition"):
             self._show_selected()
 
     def _update_job(self, job: Job) -> None:
@@ -1133,82 +780,33 @@ class MainWindow(QMainWindow):
     def _refresh_controls(self) -> None:
         busy = self.scope is not None
         selected = self._selected()
+        availability = self.queue.availability()
+        self._refresh_queue_controls(busy=busy, can_configure=availability.can_configure)
+        self.batch_settings.update_availability(availability.formats, availability.video_formats,
+                                                busy=busy, has_selection=selected is not None)
+        self.start_button.setEnabled(not busy and not availability.reading and availability.can_configure)
+        self.cancel_button.setEnabled(busy and not self.scope.cancelled.is_set())
+        self.inspector.refresh_actions(selected, busy=busy)
+        if self.mounted_editor is not None:
+            self.mounted_editor.settings.setEnabled(not busy and selected is not None and selected.queued)
+
+    def _refresh_queue_controls(self, *, busy, can_configure):
         has_files = bool(self.jobs)
         self.count.set_full_text(f"{len(self.jobs)} 个文件")
         self.rail_count.set_full_text(self.count.full_text)
-        for button in (self.add_button, self.rail_add):
+        for button in (self.add_button, self.rail_add, self.drop_area):
             button.setEnabled(not busy and self.tools is not None)
-        self.clear_button.parentWidget().setVisible(has_files)
-        self.rail_clear.parentWidget().setVisible(has_files)
-        self.rail_clear.setEnabled(has_files and not busy)
-        self.queue_tools.setVisible(has_files)
-        self.column_header.setVisible(has_files)
-        self.rail_column_header.setVisible(has_files)
-        self.list.setVisible(has_files)
+        for clear in (self.clear_button, self.rail_clear):
+            clear.parentWidget().setVisible(has_files)
+            clear.setEnabled(has_files and not busy)
+        for widget in (self.queue_tools, self.column_header, self.rail_column_header, self.list):
+            widget.setVisible(has_files)
         self.drop_area.setVisible(not has_files)
         self.drop_area.set_compact(has_files)
-        self.drop_area.setEnabled(not busy and self.tools is not None)
-        for key, row in self.rows.items():
-            row.remove_button.setEnabled(not busy)
-            queued = self.jobs[key].queued
-            # 状态（就绪/已完成）和“下一次转换想用什么参数”是两件事：
-            # 只要这一行还有可选格式，就一直显示并允许修改，只有批量转换进行中才禁用。
-            row.format.setVisible(row.format.count() > 0)
-            row.format.setEnabled(not busy and row.format.count() > 0)
-        formats = {job.output_format for job in self.jobs.values() if job.queued and job.output_format}
-        video_formats = sorted({job.output_format for job in self.jobs.values()
-                                if job.queued and isinstance(job.info, VideoInfo)
-                                and job.output_format in {"mp4", "mp4_hevc", "mkv", "mkv_hevc", "mov"}})
-        current_acceleration = self.acceleration.currentData() or "cpu"
-        available_by_format = [dict(hardware_acceleration_choices(self.tools.ffmpeg, kind))
-                               for kind in video_formats] if self.tools and video_formats else []
-        acceleration_choices = [("cpu", "CPU 软件编码")]
-        if available_by_format:
-            for backend, title in available_by_format[0].items():
-                if backend != "cpu" and all(backend in choices for choices in available_by_format[1:]):
-                    acceleration_choices.append((backend, title))
-        with QSignalBlocker(self.acceleration):
-            self.acceleration.clear()
-            for backend, title in acceleration_choices:
-                self.acceleration.addItem(title, backend)
-            selected_index = self.acceleration.findData(current_acceleration)
-            self.acceleration.setCurrentIndex(selected_index if selected_index >= 0 else 0)
-        self.acceleration.setVisible(bool(video_formats))
-        self.acceleration.setVisible(bool(video_formats))
-        self.acceleration_field.setVisible(bool(video_formats))
-        self.acceleration.setEnabled(not busy and bool(video_formats))
-        has_frame_rate_output = bool(formats & FRAME_RATE_FORMATS)
-        self.output_fps.setVisible(has_frame_rate_output)
-        self.output_fps.setVisible(has_frame_rate_output)
-        self.output_fps_field.setVisible(has_frame_rate_output)
-        self.output_fps.setEnabled(not busy and has_frame_rate_output)
-        self.output_location.setVisible(selected is not None)
-        self.batch_format.setEnabled(not busy and bool(formats))
-        self.batch_settings_button.setEnabled(not busy and bool(formats))
-        if self.mounted_editor is not None:
-            self.mounted_editor.settings.setEnabled(not busy and selected is not None and selected.queued)
-        self.clear_button.setEnabled(has_files and not busy)
-        resizable = bool(formats & RESIZABLE_FORMATS)
-        self.resolution.setVisible(not formats or resizable)
-        self.resolution.setVisible(not formats or resizable)
-        self.resolution_field.setVisible(not formats or resizable)
-        self.resolution.setEnabled(not busy and resizable)
-        self.gif_field.setVisible("gif" in formats)
-        self.gif_preset.setEnabled(not busy)
-        reading = any(job.queued and job.state == "读取中" for job in self.jobs.values())
-        self.start_button.setEnabled(not busy and not reading and bool(formats))
-        self.cancel_button.setEnabled(busy and not self.scope.cancelled.is_set())
-        self.target_size.setEnabled(not busy and bool(formats - LOSSLESS_AUDIO_FORMATS))
-        self.destination.setEnabled(not busy)
-        self.reset_destination.setVisible(self.output_directory is not None)
-        self.reset_destination.setEnabled(not busy)
-        self.locate_button.setEnabled(bool(selected))
-        self.error_button.setVisible(bool(selected and selected.detail))
-        editable = bool(selected and selected.info and selected.path.suffix.lower() != ".pdf")
-        self.edit_button.setVisible(editable)
-        self.edit_button.setEnabled(not busy)
-        self.queue_result_button.setVisible(editable and not selected.queued)
-        self.queue_result_button.setEnabled(not busy)
+        for row in self.rows.values():
+            row.set_batch_running(busy)
+        self.batch_format.setEnabled(not busy and can_configure)
+        self.batch_settings_button.setEnabled(not busy and can_configure)
 
     def _queue_selected(self) -> None:
         if self.scope is None and (job := self._selected()) and job.info and not job.queued and job.path.suffix.lower() != ".pdf":
@@ -1254,7 +852,7 @@ class MainWindow(QMainWindow):
             return None
         if editor := self.editors.get(job.key):
             return editor
-        editor = Editor(job.path, job.info, self.tools, self.output_directory, self.pages,
+        editor = Editor(job.path, job.info, self.tools, self.batch_settings.output_directory, self.pages,
                         embedded=True, lookup_media=self._queued_media,
                         report_missing=self._report_missing_media, defer_media=True,
                         get_output_stem=lambda: job.output_stem)
@@ -1279,11 +877,11 @@ class MainWindow(QMainWindow):
             return
         self._unmount_settings()
         if editor is not None:
-            editor.mount_settings(self.shared_settings)
+            editor.mount_settings(self.inspector.shared_settings)
             editor.settings.refresh_density()
             if hasattr(editor.settings, "quality"):
                 # 以编辑器当前值为准，避免切页时把用户刚调好的质量打回默认
-                self.quality.setValue(editor.settings.quality.value())
+                self.batch_settings.quality.setValue(editor.settings.quality.value())
             editor.settings.setEnabled(self.scope is None and job.queued)
             self.mounted_editor = editor
 
@@ -1625,17 +1223,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status.setText("已清空列表，磁盘上的文件已保留。")
 
-    def _choose_directory(self) -> None:
-        job = self._selected()
-        current = self.output_directory or (job.path.parent if job else Path.home())
-        directory = QFileDialog.getExistingDirectory(self, "选择输出文件夹", str(current))
-        if directory:
-            self.output_directory = Path(directory)
-            self._show_selected()
-            self._refresh_controls()
-
-    def _reset_directory(self) -> None:
-        self.output_directory = None
+    def _batch_directory_changed(self):
         self._show_selected()
         self._refresh_controls()
 
@@ -1674,20 +1262,8 @@ class MainWindow(QMainWindow):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
             self.status.setText("无法打开成品，请检查系统默认应用。")
 
-    def _batch_options(self, job):
-        kind = job.output_format
-        supported = {key for key, _ in hardware_acceleration_choices(self.tools.ffmpeg, kind)}
-        acceleration = self.acceleration.currentData() or "cpu"
-        return Export(kind, self.output_directory, small_gif=bool(self.gif_preset.currentData()),
-                      max_edge=max(0, self.resolution.currentData() or 0) if kind in RESIZABLE_FORMATS else 0,
-                      target_bytes=self.target_size.value() * 1000,
-                      video_acceleration=acceleration if acceleration in supported else "cpu",
-                      output_fps=int(self.output_fps.currentData() or 0) if kind in FRAME_RATE_FORMATS else 0,
-                      quality=self.quality.value() if isinstance(job.info, VideoInfo) else 85 if isinstance(job.info, ImageInfo) else 0,
-                      audio_bitrate=192, png_compression=7 if isinstance(job.info, ImageInfo) else 6)
-
     def _job_export(self, job):
-        options = job.export_settings or self._batch_options(job)
+        options = job.export_settings or self.batch_settings.options_for(job)
         return replace(options, format=job.output_format, output_stem=job.output_stem)
 
     def agent_job(self, key: str) -> Job | None:
@@ -1745,21 +1321,16 @@ class MainWindow(QMainWindow):
         self._refresh_controls()
 
     def _show_batch_settings(self):
-        before = (self.resolution.currentData(), self.output_fps.currentData(), self.acceleration.currentData(),
-                  self.gif_preset.currentData(), self.target_size.value(), self.quality.value(), self.output_directory)
-        if self.batch_settings_dialog.exec() == QDialog.DialogCode.Rejected:
-            for combo, value in zip((self.resolution, self.output_fps, self.acceleration, self.gif_preset), before[:4]):
-                combo.setCurrentIndex(combo.findData(value))
-            self.target_size.setValue(before[4])
-            self.quality.setValue(before[5])
-            self.output_directory = before[6]
+        if self.batch_settings.edit_defaults():
+            self._apply_batch_settings()
+        else:
             self._show_selected()
 
     def _apply_batch_settings(self):
         for job in self.jobs.values():
             if not (job.queued and job.output_format):
                 continue
-            batch = self._batch_options(job)
+            batch = self.batch_settings.options_for(job)
             current = self._job_export(job)
             options = replace(current, directory=batch.directory, max_edge=batch.max_edge,
                               target_bytes=batch.target_bytes, video_acceleration=batch.video_acceleration,
@@ -1768,7 +1339,6 @@ class MainWindow(QMainWindow):
             job.export_settings = options
             if editor := self.editors.get(job.key):
                 editor.apply_output_options(options)
-        self.batch_settings_dialog.accept()
         self.status.setText("已将批量参数应用到队列。")
 
     def start_export(self) -> None:

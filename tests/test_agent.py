@@ -161,7 +161,7 @@ class AgentWorkspaceTest(GuiTestCase):
                                 Qt.ScrollPhase.ScrollUpdate if pixels else Qt.ScrollPhase.NoScrollPhase, False)
             self.app.sendEvent(viewport, event)
 
-        for area in (window.list, window.inspector_scroll):
+        for area in (window.list, window.inspector.inspector_scroll):
             bar = check_scroll(area)
             bar.setValue(0)
             wheel(area, -120)
@@ -272,7 +272,7 @@ class AgentWorkspaceTest(GuiTestCase):
             self.settle()
             if page == 2:
                 continue
-            area = editor.settings_scroll if page == 1 else window.inspector_scroll
+            area = editor.settings_scroll if page == 1 else window.inspector.inspector_scroll
             for control in controls:
                 with self.subTest(page=page, control=control.toolTip()):
                     check_control(area, control)
@@ -287,7 +287,7 @@ class AgentWorkspaceTest(GuiTestCase):
         editor.settings.layout().addWidget(double)
         double.setValue(12.5)
         self.wait(double.isVisible)
-        check_control(window.inspector_scroll, double, double.lineEdit())
+        check_control(window.inspector.inspector_scroll, double, double.lineEdit())
         QTest.keyClick(double, Qt.Key.Key_Up)
         self.assertGreater(double.value(), 12.5)
 
@@ -334,7 +334,7 @@ class AgentWorkspaceTest(GuiTestCase):
         self.send_parameter_wheel(zoom, angle=120)
         self.assertEqual((zoom.value(), strip.zoom), (4, 4))
 
-        editor._show_volume_popup()
+        editor.transport._show_volume_popup()
         slider = editor.transport.volume_popup.slider
         slider.setValue(50)
         self.send_parameter_wheel(slider, angle=120)

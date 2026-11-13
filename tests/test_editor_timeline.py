@@ -409,7 +409,7 @@ class EditorTimelineTest(WorkflowFixture):
         window.show()
         window.add_paths([self.source, image])
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "队列")
-        window.edit_button.click()
+        window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
         self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running, "时间轴")
         strip = editor.filmstrip
@@ -488,7 +488,7 @@ class EditorTimelineTest(WorkflowFixture):
         window.show()
         window.add_paths([self.source, short, long])
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
-        window.edit_button.click()
+        window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
         self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "时间轴就绪")
@@ -540,7 +540,7 @@ class EditorTimelineTest(WorkflowFixture):
         window.show()
         window.add_paths([self.source, image])
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
-        window.edit_button.click()
+        window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
         self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "时间轴就绪")

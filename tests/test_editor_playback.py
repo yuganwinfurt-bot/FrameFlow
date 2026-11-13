@@ -162,7 +162,7 @@ class EditorPlaybackTest(WorkflowFixture):
         window.show()
         window.add_paths([self.source])
         self.wait_for(lambda: window._selected() and window._selected().info, "媒体队列导入")
-        QTest.mouseClick(window.edit_button, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.inspector.edit_button, Qt.MouseButton.LeftButton)
         editor = window.pages.currentWidget()
         self.assertIsInstance(editor, Editor)
         self.assertFalse(editor.isWindow())

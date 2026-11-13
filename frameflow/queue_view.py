@@ -248,6 +248,12 @@ class Row(QWidget):
                 self.format.addItem(title, key)
             self.format.setCurrentIndex(self.format.findData(current))
 
+    def set_batch_running(self, busy: bool) -> None:
+        self.remove_button.setEnabled(not busy)
+        has_formats = self.format.count() > 0
+        self.format.setVisible(has_formats)
+        self.format.setEnabled(has_formats and not busy)
+
     def update_job(self, job: Job) -> None:
         self.state.set_state(f"{job.percent}%" if job.state == "转换中" else job.state, state_tone(job))
         if job.info:

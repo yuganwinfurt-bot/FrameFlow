@@ -56,13 +56,13 @@ class DesktopQueueTest(WorkflowFixture):
                         if codec == "JPEG":
                             self.assertEqual(result.getpixel((0, 0)), (255, 255, 255))
         format_picker.setCurrentIndex(format_picker.findData("bmp"))
-        window.target_size.setValue(1)
+        window.batch_settings.target_size.setValue(1)
         window.start_button.click()
         self.wait_for(lambda: window.scope is None, "图片体积限制")
         self.assertLessEqual(job.output.stat().st_size, 1_000)
         self.assertIn("已达到", job.output_note)
-        window.target_size.setValue(0)
-        window.resolution.setCurrentIndex(window.resolution.findData(256))
+        window.batch_settings.target_size.setValue(0)
+        window.batch_settings.resolution.setCurrentIndex(window.batch_settings.resolution.findData(256))
         format_picker.setCurrentIndex(format_picker.findData("png"))
         window.start_button.click()
         self.wait_for(lambda: window.scope is None, "按指定最长边放大图片")
@@ -77,22 +77,22 @@ class DesktopQueueTest(WorkflowFixture):
         window.add_paths([self.source, second, self.source])
         self.assertEqual(len(window.jobs), 2)
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "桌面缩略图")
-        self.assertFalse(window.preview.pixmap().isNull())
-        self.assertIn("320×180", window.video_info.text())
+        self.assertFalse(window.inspector.preview.pixmap().isNull())
+        self.assertIn("320×180", window.inspector.video_info.text())
         settings = window.mounted_editor
         # 转换页复用的只是参数区：保存目录保留（就是转换页的目的地），
         # 「保存编辑结果」由主窗口自己的底栏承担。
         self.assertTrue(settings.settings.directory_group.isVisible())
-        self.assertTrue(window.output_name.full_text.endswith(".mp4"))
+        self.assertTrue(window.batch_settings.output_name.full_text.endswith(".mp4"))
         self.assertTrue(settings.settings.acceleration.isVisible())
         self.assertEqual(settings.settings.acceleration.itemData(0), "cpu")
         self.assertEqual(settings.settings.directory_path.path, str(self.root))
         output_directory = self.root / ("保存位置" * 13) / "输出"
         with patch("frameflow.window.QFileDialog.getExistingDirectory",
                    return_value=str(output_directory)) as choose:
-            window._choose_directory()
+            window.batch_settings._choose_directory()
         self.assertEqual(choose.call_args.args[2], str(self.root))
-        self.assertEqual(window.destination.toolTip(), str(output_directory))
+        self.assertEqual(window.batch_settings.destination.toolTip(), str(output_directory))
         first, following = (job for job in window.jobs.values() if job.queued)
         batch_index = window.batch_format.findData("mkv")
         window.batch_format.setCurrentIndex(batch_index)
@@ -101,12 +101,12 @@ class DesktopQueueTest(WorkflowFixture):
         self.assertEqual(window.batch_format.currentIndex(), 0)
         following_format = window.rows[following.key].format
         following_format.setCurrentIndex(following_format.findData("mp4"))
-        with patch("frameflow.window.QInputDialog.getInt", return_value=(160, True)):
-            custom = window.resolution.findData(-1)
-            window.resolution.setCurrentIndex(custom)
-            window.resolution.activated.emit(custom)
-        window.target_size.setValue(45)
-        window.output_fps.setCurrentIndex(window.output_fps.findData(30))
+        with patch("frameflow.batch_settings.QInputDialog.getInt", return_value=(160, True)):
+            custom = window.batch_settings.resolution.findData(-1)
+            window.batch_settings.resolution.setCurrentIndex(custom)
+            window.batch_settings.resolution.activated.emit(custom)
+        window.batch_settings.target_size.setValue(45)
+        window.batch_settings.output_fps.setCurrentIndex(window.batch_settings.output_fps.findData(30))
         window._apply_batch_settings()
         window.start_button.click()
         self.wait_for(lambda: window.scope is None, "批量转换完成")
@@ -351,7 +351,7 @@ class DesktopQueueTest(WorkflowFixture):
         window.show()
         window.add_paths([self.source, image, video, audio])
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "素材导入")
-        window.edit_button.click()
+        window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
         self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "编辑器就绪")
@@ -516,7 +516,7 @@ class DesktopQueueTest(WorkflowFixture):
         window.show()
         window.add_paths([source, video])
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "队列素材就绪")
-        window.edit_button.click()
+        window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
         self.wait_for(lambda: editor.scope is None and editor.audio_view.waveform, "预览音频波形")
         source.rename(moved)
@@ -576,9 +576,9 @@ class DesktopQueueTest(WorkflowFixture):
         audio, video = window.jobs.values()
         self.assertIsInstance(audio.info, AudioInfo)
         self.assertEqual((audio.info.sample_rate, audio.info.channels), (44100, 1))
-        self.assertIn("44.1 kHz", window.video_info.text())
-        self.assertIn("单声道", window.video_info.text())
-        self.assertFalse(window.preview.pixmap().isNull())
+        self.assertIn("44.1 kHz", window.inspector.video_info.text())
+        self.assertIn("单声道", window.inspector.video_info.text())
+        self.assertFalse(window.inspector.preview.pixmap().isNull())
         video_format = window.rows[video.key].format
         audio_format = window.rows[audio.key].format
         self.assertTrue(video_format.isVisible() and audio_format.isVisible())
@@ -602,7 +602,7 @@ class DesktopQueueTest(WorkflowFixture):
         if os.name == "nt":
             with patch("frameflow.window.QProcess") as explorer:
                 explorer.return_value.startDetached.return_value = True
-                window.locate_button.click()
+                window.inspector.locate_button.click()
                 explorer.return_value.setNativeArguments.assert_called_once_with(
                     f'/select,"{audio.output.absolute()}"')
 
@@ -610,15 +610,15 @@ class DesktopQueueTest(WorkflowFixture):
         QTest.mouseClick(video_row.thumb, Qt.MouseButton.LeftButton)
         self.assertIs(window._selected(), video)
         QTest.mouseClick(video_row.remove_button, Qt.MouseButton.LeftButton)
-        self.assertTrue(window.resolution.isHidden())
+        self.assertTrue(window.batch_settings.resolution.isHidden())
         target = self.root / "音频 成品"
         with patch("frameflow.window.QFileDialog.getExistingDirectory", return_value=str(target)):
-            window.destination.click()
+            window.batch_settings.destination.click()
         for ext, codec in (("m4a", "AAC"), ("wav", "PCM_S16LE"), ("flac", "FLAC"),
                            ("opus", "OPUS"), ("ogg", "VORBIS")):
             with self.subTest(extension=ext):
                 audio_format.setCurrentIndex(audio_format.findData(ext))
-                self.assertEqual(window.target_size.isEnabled(), ext not in ("wav", "flac"))
+                self.assertEqual(window.batch_settings.target_size.isEnabled(), ext not in ("wav", "flac"))
                 window.start_button.click()
                 self.wait_for(lambda: window.scope is None, f"保存 {ext}")
                 self.assertEqual(audio.state, "已完成", audio.detail)
@@ -628,7 +628,7 @@ class DesktopQueueTest(WorkflowFixture):
                 self.assertAlmostEqual(audio.output_info.duration, 1.5, delta=0.12)
                 self.decode(audio.output)
         audio_format.setCurrentIndex(audio_format.findData("mp3"))
-        window.target_size.setValue(16)
+        window.batch_settings.target_size.setValue(16)
         window.start_button.click()
         self.wait_for(lambda: window.scope is None, "按体积目标转换 MP3")
         self.assertLessEqual(audio.output.stat().st_size, 16_000)
