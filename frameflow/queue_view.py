@@ -241,14 +241,12 @@ class Row(QWidget):
         if key := self.format.currentData():
             self.format_changed.emit(self.job_key, key)
 
-    def set_formats(self, job: Job, choices) -> None:
+    def set_formats(self, current: str, choices) -> None:
         with QSignalBlocker(self.format):
             self.format.clear()
-            if not job.output_format and choices:
-                job.output_format = choices[0][0]
             for key, title in choices:
                 self.format.addItem(title, key)
-            self.format.setCurrentIndex(self.format.findData(job.output_format))
+            self.format.setCurrentIndex(self.format.findData(current))
 
     def update_job(self, job: Job) -> None:
         self.state.set_state(f"{job.percent}%" if job.state == "转换中" else job.state, state_tone(job))

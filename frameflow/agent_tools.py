@@ -10,10 +10,11 @@ from uuid import uuid4
 from PySide6.QtCore import QObject, Slot
 from PySide6.QtWidgets import QFileDialog
 
+from .agent_host import AgentHost
 from .agent_ui import PlanCard
 from .media import (
     AudioInfo, Export, ImageInfo, VideoInfo, VIDEO_RESOLUTIONS, filename_problem,
-    hardware_acceleration_choices, output_extension,
+    output_extension,
 )
 
 
@@ -89,10 +90,10 @@ class AgentTools(QObject):
     )
     _schemas = {item["function"]["name"]: item["function"]["parameters"] for item in specs}
 
-    def __init__(self, window, formats_for):
-        super().__init__(window)
-        self.window = window
-        self.page = window.agent_page
+    def __init__(self, host: AgentHost, page, formats_for, events, *, parent=None):
+        super().__init__(parent)
+        self.host = host
+        self.page = page
         self.formats_for = formats_for
         self.approved_directory = None
         self.pending = None
@@ -100,7 +101,6 @@ class AgentTools(QObject):
         self.active_scope = None
         self.recent = {}
         self.page.directory_requested.connect(self.choose_directory)
-        events = window.events
         events.phase.connect(self._phase)
         events.progress.connect(self._progress)
         events.exported.connect(self._exported)
@@ -144,13 +144,13 @@ class AgentTools(QObject):
             raise ToolError(f"参数 {key} 的类型或取值不受支持。")
 
     def _job(self, id, *, editable=False):
-        job = self.window.jobs.get(id)
+        job = self.host.agent_job(id)
         if job is None:
             raise ToolError("这个媒体已经不在队列中，请重新读取队列。")
         if editable:
-            if not self.window.tools or not job.info or not job.output_format:
+            if not self.host.agent_has_export_tools() or not job.info or not job.output_format:
                 raise ToolError("媒体尚未就绪或没有可用输出格式。")
-            if self.window.scope is not None:
+            if self.host.agent_batch_running():
                 raise ToolError("批量转换进行中，请等待任务结束。")
         return job
 
@@ -163,9 +163,9 @@ class AgentTools(QObject):
                 "state": job.state, "format": job.output_format}
 
     def list_media(self, offset=0, limit=50):
-        jobs = self.window.jobs
+        jobs = self.host.agent_jobs()
         return {"total": len(jobs), "offset": offset,
-                "items": [self._summary(job) for job in list(jobs.values())[offset:offset + limit]]}
+                "items": [self._summary(job) for job in jobs[offset:offset + limit]]}
 
     def get_media_info(self, id):
         job = self._job(id)
@@ -176,26 +176,25 @@ class AgentTools(QObject):
                                             "audio_codec", "sample_rate", "channels", "bitrate")
                                if hasattr(job.info, name)}
             result["formats"] = [{"id": key, "label": title} for key, title in self.formats_for(job.info)]
-        if self.window.tools and job.output_format:
-            export = self.window._job_export(job)
+        if self.host.agent_has_export_tools() and job.output_format:
+            export = self.host.agent_export_options(job)
             result["output"] = {"format": export.format, "long_edge": export.max_edge, "quality": export.quality,
                                 "filename": export.output_stem, "target_bytes": export.target_bytes,
                                 "agent_directory_selected": self.approved_directory is not None}
         return result
 
     def get_current_selection(self):
-        job = self.window._selected()
+        job = self.host.agent_selected_job()
         return self._summary(job) if job else None
 
     def select_media(self, id):
         job = self._job(id)
-        self.window.list.setCurrentItem(self.window.items[id])
-        self.window.preview_files.setCurrentItem(self.window.preview_items[id])
+        self.host.agent_select_job(id)
         return self._summary(job)
 
     def _apply(self, job, **changes):
-        options = replace(self.window._job_export(job), **changes)
-        self.window._apply_agent_options(job, options)
+        options = replace(self.host.agent_export_options(job), **changes)
+        self.host.agent_apply_export_options(job, options)
         return self.get_media_info(job.key)["output"]
 
     def set_output_format(self, id, format, codec=None):
@@ -205,8 +204,8 @@ class AgentTools(QObject):
             kind += "_hevc"
         if (codec and CODECS.get(kind) != codec) or kind not in dict(self.formats_for(job.info)):
             raise ToolError("此媒体不支持所选容器和编码组合。")
-        available = dict(hardware_acceleration_choices(self.window.tools.ffmpeg, kind))
-        current = self.window._job_export(job)
+        available = self.host.agent_acceleration_keys(kind)
+        current = self.host.agent_export_options(job)
         acceleration = current.video_acceleration if current.video_acceleration in available else "cpu"
         return self._apply(job, format=kind, video_acceleration=acceleration)
 
@@ -257,7 +256,7 @@ class AgentTools(QObject):
     def set_output_directory(self, id, directory):
         job = self._job(id, editable=True)
         source = job.path.parent
-        existing = self.window._job_export(job).directory or source
+        existing = self.host.agent_export_options(job).directory or source
         allowed = [source, existing]
         if self.approved_directory is not None:
             allowed.append(self.approved_directory)
@@ -285,7 +284,7 @@ class AgentTools(QObject):
     def _entry(self, job):
         if not job.queued:
             raise ToolError("这项是已生成的成品，请先在队列中加入待转换。")
-        options = self.window._job_export(job)
+        options = self.host.agent_export_options(job)
         if options.format not in dict(self.formats_for(job.info)):
             raise ToolError("当前输出格式与媒体类型不兼容。")
         if options.output_stem and (problem := filename_problem(options.output_stem)):
@@ -338,7 +337,7 @@ class AgentTools(QObject):
     def _confirm(self, plan):
         if plan is not self.pending:
             return
-        if self.window.scope is not None:
+        if self.host.agent_batch_running():
             self.page.set_activity("当前有转换任务，请等任务结束后再确认。")
             return
         try:
@@ -349,12 +348,13 @@ class AgentTools(QObject):
             self._discard("计划已失效。媒体、目录或参数发生变化，请重新生成。")
             return
         tasks = [(entry.key, entry.source, entry.info, entry.options) for entry in plan.entries]
-        if not self.window._start_batch(tasks):
+        scope = self.host.agent_start_batch(tasks)
+        if scope is None:
             self.page.set_activity("当前有转换任务，请等任务结束后再确认。")
             return
         self.pending = None
         self.active = plan
-        self.active_scope = self.window.scope
+        self.active_scope = scope
         plan.state = "running"
         plan.card.started()
         for key in plan.rows:
@@ -381,17 +381,18 @@ class AgentTools(QObject):
             plan = self.pending
         if task_id and plan is None:
             raise ToolError("未找到该任务。")
-        if plan is None and self.window.scope is not None:
-            return {"status": "manual_conversion", "percent": self.window.progress.value(),
-                    "items": [self._summary(self.window.jobs[key]) for key in self.window.batch_keys]}
+        if plan is None and (batch := self.host.agent_batch_status()) is not None:
+            percent, jobs = batch
+            return {"status": "manual_conversion", "percent": percent,
+                    "items": [self._summary(job) for job in jobs]}
         if plan is None and self.recent:
             plan = next(reversed(self.recent.values()))
         return {"task_id": plan.id, "status": plan.state, "items": list(plan.rows.values())} if plan else {"status": "idle"}
 
     def cancel_conversion(self, task_id):
-        if (not self.active or self.active.id != task_id or self.window.scope is not self.active_scope):
+        if (not self.active or self.active.id != task_id or self.active_scope is None
+                or not self.host.agent_cancel_batch(self.active_scope)):
             raise ToolError("只能取消由 Agent 确认且正在运行的任务。")
-        self.window.cancel_export()
         self.active.state = "cancelling"
         self.active.card.cancel.setEnabled(False)
         return {"task_id": task_id, "status": "cancelling"}

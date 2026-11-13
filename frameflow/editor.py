@@ -28,7 +28,8 @@ from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabe
                              SeekSlider, TransportButton, VideoPreview, VolumePopup)
 from .filmstrip import Filmstrip
 from . import icons
-from .media import audio_encoder_args, output_extension
+from .media import output_extension
+from .estimates import estimate_audio, estimate_video
 from .media import (AUDIO_EXTENSIONS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
                     AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
                     hardware_acceleration_choices)
@@ -1633,62 +1634,34 @@ class Editor(QDialog):
             duration = length(self._audio_track())
             # 编辑导出把各段统一成 48 kHz 立体声，之后再应用用户的输出设置。
             sample_rate, channels = 48000, 2
-        if not duration:
-            self._show_estimate("无法准确预估", "当前没有可用于估算的音轨时长。")
-            return
-        if options.format == "flac":
-            self._show_estimate("无法准确预估", "FLAC 的无损压缩率取决于实际采样内容。")
-            return
-        if options.format == "wav":
-            sample_rate = options.audio_sample_rate or sample_rate
-            channels = options.audio_channels or channels
-            if not sample_rate or not channels:
-                self._show_estimate("无法准确预估", "缺少 WAV 输出的采样率或声道数。")
-                return
-            estimate = duration * sample_rate * channels * 2 + 128
-            basis = f"{duration:.3f} 秒 × {sample_rate} Hz × {channels} 声道 × 2 字节，加上 WAV 文件头。"
-        else:
-            args = audio_encoder_args(options)
-            if "-b:a" not in args or options.size_limit:
-                self._show_estimate("无法准确预估", "可变码率或目标体积模式的最终码率取决于实际编码。")
-                return
-            rate_arg = args[args.index("-b:a") + 1]
-            bitrate = int(rate_arg.removesuffix("k")) * (1000 if rate_arg.endswith("k") else 1)
-            overhead = 1024 + (duration * 192 if options.format == "m4a" else 0)
-            estimate = duration * bitrate / 8 + overhead
-            basis = f"{duration:.3f} 秒 × {bitrate / 1000:g} kbps ÷ 8，加上少量封装开销；实际码率可能波动。"
-        self._show_estimate(f"约 {_size_text(estimate)}", basis, comparable_size=estimate if source_audio else None)
+        estimate = estimate_audio(options, duration=duration, sample_rate=sample_rate, channels=channels)
+        self._display_size_estimate(estimate, comparable=source_audio)
 
     def _estimate_video(self, options):
         source = self.info
-        duration = source.duration if self.configuration_only else self._video_duration()
-        original_only = self.configuration_only or all(clip.path == self.path for clip in self.video)
-        # 用源视频码率作参考，再根据两种编码的相对效率、画质和输出像素吞吐量调整。
-        codecs = {"H264": 1.0, "HEVC": .7, "VP9": .75, "MPEG4": 1.4}
-        output_codec = {"mp4": "H264", "mov": "H264", "mkv": "H264", "mp4_hevc": "HEVC",
-                        "mkv_hevc": "HEVC", "webm": "VP9"}.get(options.format)
-        input_factor, output_factor = codecs.get(source.codec), codecs.get(output_codec)
-        if not (duration and source.bitrate and source.fps and input_factor and output_factor and
-                original_only and options.video_acceleration == "cpu" and not options.size_limit):
-            self._show_estimate("无法准确预估", "缺少可比的源视频码率，或当前编码、混合素材及目标体积设置无法据此估算。")
-            return
-        fps = options.output_fps or (source.fps if self.configuration_only else self.frames.fps)
-        size_ratio = (options.max_edge / max(source.width, source.height)) ** 1.4 if options.max_edge else 1
-        nominal_crf = {"H264": 23, "HEVC": 26, "VP9": 32}[output_codec]
-        quality_ratio = 2 ** ((nominal_crf - (options.quality or nominal_crf)) / 6)
-        video_bytes = (duration * source.bitrate / 8 * output_factor / input_factor *
-                       size_ratio * (fps / source.fps) ** .65 * quality_ratio)
         if self.configuration_only:
+            duration = source.duration
             audio_duration = (source.audio_duration or duration) if source.audio_stream is not None else 0
+            fps = source.fps
+            original_only = True
         else:
+            duration = self._video_duration()
             # render_edit 补齐音轨并在画面结束时截断。
             audio_duration = duration if self._audio_track() else 0
-        audio_bytes = audio_duration * (options.audio_bitrate or 128) * 1000 / 8
-        lower = _size_text(video_bytes * .55 + audio_bytes)
-        upper = _size_text(video_bytes * 1.8 + audio_bytes)
-        self._show_estimate(f"约 {lower}–{upper}",
-                            f"按 {duration:.3f} 秒、编码器、画质、分辨率和帧率估算，另计音轨。"
-                            "恒定质量编码的实际大小随画面内容变化，可能超出此范围。")
+            fps = self.frames.fps if self.frames else 0
+            original_only = all(clip.path == self.path for clip in self.video)
+        estimate = estimate_video(source, options, duration=duration, timeline_fps=fps,
+                                  audio_duration=audio_duration, original_only=original_only)
+        self._display_size_estimate(estimate)
+
+    def _display_size_estimate(self, estimate, *, comparable=False):
+        if estimate.size_bytes is None:
+            self._show_estimate("无法准确预估", estimate.basis)
+            return
+        text = f"约 {_size_text(estimate.size_bytes)}"
+        if estimate.upper_bytes is not None:
+            text += f"–{_size_text(estimate.upper_bytes)}"
+        self._show_estimate(text, estimate.basis, comparable_size=estimate.size_bytes if comparable else None)
 
     def _uses_picture_estimate(self):
         if self.configuration_only:

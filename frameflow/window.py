@@ -21,22 +21,23 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import AgentSession
+from .conversion_batch import BatchTask, inspect_media, run_batch
 from .agent_tools import AgentTools
 from .agent_ui import AgentPage, Attachment
 from .media import (AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, LOSSLESS_AUDIO_FORMATS, VIDEO_EXTENSIONS,
                     VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS, WAVEFORM_SECONDS)
 from .media import AudioInfo, ImageInfo, VideoInfo
 from .icons import INK, icon as line_icon, pixmap as line_pixmap
-from .media import (Cancelled, Export, MediaError, MediaInfo, Processes, Tools,
+from .media import (Export, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
-from .media import convert, filename_problem, media_path_missing, output_extension, probe, thumbnail
+from .media import filename_problem, media_path_missing, output_extension
 from .details import DetailsDialog
 from .motion import (Button, Combo, DirectoryButton, DropArea, Motion,
                      NavigationBar, PageTransition, QualityRow, SpinBox, hide_vertical_scroll_bar,
                      install_parameter_wheel_policy, local_files)
 from .editor import Editor
 from .media_text import file_size, metadata, rail_meta
-from .queue_state import Job
+from .queue_state import Job, QueueState
 from .queue_view import (ROW_HEIGHT, THUMB_SIZE, BatchFormatMenu, MediaQueue, QueueColumns,
                          QueueDelegate, Row, StatusPill, queue_thumbnail, state_tone)
 from .theme import STYLE, app_icon, brand_mark, shadow
@@ -186,7 +187,8 @@ class MainWindow(QMainWindow):
         install_parameter_wheel_policy()
         self.tools = tools
         self.closing = False
-        self.jobs: dict[str, Job] = {}
+        self.queue = QueueState()
+        self.jobs = self.queue.jobs
         self.rows: dict[str, Row] = {}
         self.items: dict[str, QListWidgetItem] = {}
         self.preview_items: dict[str, QListWidgetItem] = {}
@@ -236,7 +238,7 @@ class MainWindow(QMainWindow):
         self._build_preview_rail()
         self.agent_page = AgentPage(self._agent_attachment)
         self.agent_page.attachments_requested.connect(self._choose_agent_attachments)
-        self.agent_tools = AgentTools(self, formats_for)
+        self.agent_tools = AgentTools(self, self.agent_page, formats_for, self.events, parent=self)
         self.agent_session = AgentSession(self.agent_page, self, tools=self.agent_tools)
         self.pages = QStackedWidget()
         self.pages.setObjectName("pageWorkspace")
@@ -845,11 +847,7 @@ class MainWindow(QMainWindow):
             if not rail.moveRow(root, source, root, destination):
                 wide.moveRow(root, slot, root, source + int(source > slot))
                 return False
-        keys = list(self.jobs)
-        keys.insert(slot, keys.pop(source))
-        reordered = [(key, self.jobs[key]) for key in keys]
-        self.jobs.clear()
-        self.jobs.update(reordered)
+        self.queue.move(key, slot)
         return True
 
     def _agent_attachment(self, key):
@@ -930,8 +928,9 @@ class MainWindow(QMainWindow):
             row = Row(job)
             row.remove_requested.connect(self._remove_job)
             row.format_changed.connect(self._set_format)
-            row.set_formats(job, ())
-            self.jobs[key], self.items[key], self.rows[key] = job, item, row
+            row.set_formats(job.output_format, ())
+            self.queue.add(job)
+            self.items[key], self.rows[key] = item, row
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
             preview_item = QListWidgetItem(path.name)
@@ -951,29 +950,16 @@ class MainWindow(QMainWindow):
                 row.update_job(job)
                 self._update_preview_item(job)
             else:
-                self.reader_pool.submit(self._inspect, key, path, self.tools, self.inspections)
+                self.reader_pool.submit(
+                    inspect_media, key, path, self.tools, self.inspections,
+                    inspected=self.events.inspected.emit, thumb_ready=self.events.thumb_ready.emit,
+                )
             added += 1
         if added and self.list.currentItem() is None:
             self.list.setCurrentRow(0)
         if added or skipped:
             self.status.setText(f"已添加 {added} 个文件" + (f"，跳过 {skipped} 个重复项或非文件" if skipped else "。"))
         self._refresh_controls()
-
-    def _inspect(self, key: str, path: Path, tools: Tools, scope: Processes) -> None:
-        try:
-            info = probe(path, tools, scope)
-        except Cancelled:
-            return
-        except (MediaError, OSError) as exc:
-            self.events.inspected.emit(key, None, str(exc))
-            return
-        self.events.inspected.emit(key, info, "")
-        try:
-            image = thumbnail(path, info, tools, scope)
-        except (MediaError, OSError):
-            image = b""
-        if not scope.cancelled.is_set():
-            self.events.thumb_ready.emit(key, image)
 
     @Slot(str, object, str)
     def _inspected(self, key: str, info: MediaInfo | None, error: str) -> None:
@@ -982,7 +968,10 @@ class MainWindow(QMainWindow):
                 return
             job.info, job.detail = info, error
             job.state = ("就绪" if job.queued else "成品") if info else "读取失败"
-            self.rows[key].set_formats(job, formats_for(info))
+            choices = formats_for(info)
+            if not job.output_format and choices:
+                job.output_format = choices[0][0]
+            self.rows[key].set_formats(job.output_format, choices)
             self._update_preview_item(job)
             self._update_job(job)
             if self.navigation.currentIndex() == 1 and self._selected() is job and info:
@@ -1623,7 +1612,7 @@ class MainWindow(QMainWindow):
             editor.deleteLater()
         item = self.items.pop(key)
         self.rows.pop(key)
-        self.jobs.pop(key)
+        self.queue.remove(key)
         with QSignalBlocker(self.preview_files):
             preview_item = self.preview_items.pop(key)
             self.preview_files.takeItem(self.preview_files.row(preview_item))
@@ -1646,7 +1635,7 @@ class MainWindow(QMainWindow):
         self.preview_items.clear()
         self.items.clear()
         self.rows.clear()
-        self.jobs.clear()
+        self.queue.clear()
         with QSignalBlocker(self.preview_files), QSignalBlocker(self.list):
             self.preview_files.clear()
             self.list.clear()
@@ -1719,7 +1708,48 @@ class MainWindow(QMainWindow):
         options = job.export_settings or self._batch_options(job)
         return replace(options, format=job.output_format, output_stem=job.output_stem)
 
-    def _apply_agent_options(self, job, options):
+    def agent_job(self, key: str) -> Job | None:
+        return self.jobs.get(key)
+
+    def agent_jobs(self) -> tuple[Job, ...]:
+        return tuple(self.jobs.values())
+
+    def agent_selected_job(self) -> Job | None:
+        return self._selected()
+
+    def agent_select_job(self, key: str) -> None:
+        self.list.setCurrentItem(self.items[key])
+        self.preview_files.setCurrentItem(self.preview_items[key])
+
+    def agent_has_export_tools(self) -> bool:
+        return self.tools is not None
+
+    def agent_batch_running(self) -> bool:
+        return self.scope is not None
+
+    def agent_export_options(self, job: Job) -> Export:
+        return self._job_export(job)
+
+    def agent_acceleration_keys(self, format_name: str) -> set[str]:
+        return {key for key, _ in hardware_acceleration_choices(self.tools.ffmpeg, format_name)}
+
+    def agent_start_batch(self, tasks: list[BatchTask]) -> object | None:
+        if self._start_batch(tasks):
+            return self.scope
+        return None
+
+    def agent_cancel_batch(self, scope: object) -> bool:
+        if self.scope is None or self.scope is not scope:
+            return False
+        self.cancel_export()
+        return True
+
+    def agent_batch_status(self) -> tuple[int, tuple[Job, ...]] | None:
+        if self.scope is None:
+            return None
+        return self.progress.value(), tuple(self.jobs[key] for key in self.batch_keys)
+
+    def agent_apply_export_options(self, job: Job, options: Export) -> None:
         job.export_settings = options
         job.output_format = options.format
         combo = self.rows[job.key].format
@@ -1795,43 +1825,12 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.status.setText(f"正在转换 {self.total} 个文件…")
         self._refresh_controls()
-        self.export_pool.submit(self._run_batch, tasks, self.tools, self.scope)
+        self.export_pool.submit(
+            run_batch, tasks, self.tools, self.scope,
+            phase=self.events.phase.emit, progress=self.events.progress.emit,
+            exported=self.events.exported.emit, completed=self.events.completed.emit,
+        )
         return True
-
-    def _run_batch(self, tasks, tools: Tools, scope: Processes) -> None:
-        try:
-            for key, path, info, options in tasks:
-                if scope.cancelled.is_set():
-                    break
-                self.events.phase.emit(key, "转换中")
-                try:
-                    output = convert(path, info, options, tools, scope,
-                                     lambda pct: self.events.progress.emit(key, pct),
-                                     notice=lambda message: self.events.phase.emit(key, message))
-                except Cancelled:
-                    break
-                except (MediaError, OSError) as exc:
-                    self.events.exported.emit(key, None, None, "", str(exc))
-                else:
-                    output_info = None
-                    note = ""
-                    try:
-                        size = output.stat().st_size
-                        if options.size_limit:
-                            target = file_size(options.size_limit)
-                            if size <= options.size_limit:
-                                note = f"已达到 {target} 目标"
-                            else:
-                                note = f"超过 {target} 目标，已保存可用的最小版本"
-                        if options.format == "pdf":
-                            output_info = ImageInfo(0, 0, "PDF", size)
-                        else:
-                            output_info = probe(output, tools, scope)
-                    except (MediaError, OSError):
-                        pass  # 成品已保存，读取详情失败不影响结果
-                    self.events.exported.emit(key, output, output_info, note, "")
-        finally:
-            self.events.completed.emit(scope.cancelled.is_set())
 
     @Slot(str, str)
     def _phase(self, key: str, state: str) -> None:

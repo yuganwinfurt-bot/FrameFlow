@@ -2733,7 +2733,7 @@ class WorkflowTest(unittest.TestCase):
                 return operation(*args, **kwargs)
             return run
 
-        with patch("frameflow.window.convert", side_effect=hold(convert)):
+        with patch("frameflow.conversion_batch.convert", side_effect=hold(convert)):
             window.start_button.click()
             try:
                 scope = window.scope
