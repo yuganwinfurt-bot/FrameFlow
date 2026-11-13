@@ -29,7 +29,7 @@ class EditorExportTest(WorkflowFixture):
             QTest.mouseClick(window.navigation, Qt.MouseButton.LeftButton,
                              pos=window.navigation.tabRect(index).center())
             QTest.qWait(25)
-        self.wait_for(lambda: not window.page_transition.running and editor.frames and editor.scope is None,
+        self.wait_for(lambda: not window.page_transition.running and editor.session.frames and editor.scope is None,
                       "预览转场和视频读取完成")
         self.assertIs(window._selected(), job)
         self.assertIs(window.pages.currentWidget(), editor)
@@ -88,7 +88,7 @@ class EditorExportTest(WorkflowFixture):
         outputs = []
         editor.saved.connect(outputs.append)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "视频可选帧")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "视频可选帧")
         editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("png"))
         self.assertEqual(editor.settings.picture_quality_label.text(), "PNG 压缩级别")
         self.assertIn("不会降低画质", editor.settings.picture_preset_hint.text())
@@ -140,7 +140,7 @@ class EditorExportTest(WorkflowFixture):
         editor = Editor(source, probe(source, self.tools, Processes()), self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames is not None and editor.scope is None, "读取视频帧")
+        self.wait_for(lambda: editor.session.frames is not None and editor.scope is None, "读取视频帧")
         output = editor.settings.estimate_rows["output"]
         delta = editor.settings.estimate_rows["delta"]
         initial_video = output.text()
@@ -155,12 +155,12 @@ class EditorExportTest(WorkflowFixture):
         def duplicate(last):
             select_frames(1, last)
             editor.copy_video()
-            editor.cursor.setValue(int(length(editor.video)))
+            editor.cursor.setValue(int(length(editor.session.video)))
             editor.paste_video_after()
 
         duplicate(169)
         duplicate(99)
-        self.assertEqual(length(editor.video), 437)
+        self.assertEqual(length(editor.session.video), 437)
         longer_video = output.text()
         self.assertNotEqual(initial_video, longer_video)
         self.assertIn("17.480 秒", editor.settings.estimate_card.toolTip())

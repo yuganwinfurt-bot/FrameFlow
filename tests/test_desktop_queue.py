@@ -218,11 +218,11 @@ class DesktopQueueTest(WorkflowFixture):
         self.assertIs(window.pages.currentWidget(), shared)
         self.wait_for(lambda: not window.page_transition.running, "预览转场结束")
         self.assertIs(shared.settings_scroll.widget(), shared.settings)
-        self.wait_for(lambda: shared.frames and shared.scope is None, "视频读取结束")
+        self.wait_for(lambda: shared.session.frames and shared.scope is None, "视频读取结束")
         shared.settings.quality.setValue(27)
         directory = self.root / "仅第一个文件"
         with patch("frameflow.editor_settings.QFileDialog.getExistingDirectory", return_value=str(directory)):
-            shared.choose_directory()
+            shared.settings.choose_directory()
         window.navigation.setCurrentIndex(0)
         self.wait_for(lambda: not window.page_transition.running, "返回转换页")
         self.assertIs(window.mounted_editor, shared)
@@ -353,9 +353,9 @@ class DesktopQueueTest(WorkflowFixture):
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "素材导入")
         window.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "编辑器就绪")
-        base = editor.frames.count
+        base = editor.session.frames.count
         keys = {job.path: key for key, job in window.jobs.items()}
         left = window.preview_files
         strip = editor.filmstrip
@@ -416,9 +416,9 @@ class DesktopQueueTest(WorkflowFixture):
             self.app.sendEvent(left.viewport(), motion)
             QTest.mouseRelease(left.viewport(), button, pos=move)
             drag.return_value.exec.assert_called_once_with(copy)
-        self.wait_for(lambda: editor.scope is None and length(editor.video) == base + 1, "图片插入一帧")
+        self.wait_for(lambda: editor.scope is None and length(editor.session.video) == base + 1, "图片插入一帧")
         self.assertIs(window.pages.currentWidget(), editor)
-        picture_ref = editor._frame_ref(2)
+        picture_ref = editor.session.frame_ref(2)
         self.wait_for(lambda: editor.shown_frame == picture_ref and picture_ref in strip.cache, "插入帧预览与缩略图")
         outputs = []
         editor.saved.connect(outputs.append)
@@ -431,7 +431,7 @@ class DesktopQueueTest(WorkflowFixture):
         def drop_video():
             send_drop(video, strip.viewport(), QPoint(strip._tile_rect(2).right() - 8, 30), boundary=3, after=True)
 
-        video_before, audio_before = editor.video, editor.audio
+        video_before, audio_before = editor.session.video, editor.session.audio
         prepared = editor._load_dropped_video(video, window.jobs[keys[video]].info, Processes())
         started = threading.Event()
 
@@ -446,23 +446,23 @@ class DesktopQueueTest(WorkflowFixture):
             left.setFocus()
             QTest.keyClick(left, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
             self.wait_for(lambda: editor.scope is None, "撤销尚未提交的视频插入")
-        self.assertIs(editor.video, video_before)
-        self.assertIs(editor.audio, audio_before)
-        self.assertNotIn(video, editor.video_sources)
+        self.assertIs(editor.session.video, video_before)
+        self.assertIs(editor.session.audio, audio_before)
+        self.assertNotIn(video, editor.session.video_sources)
         self.assertEqual(editor.status.text(), "已取消素材插入。")
 
         drop_video()
-        self.wait_for(lambda: editor.scope is None and video in editor.video_sources, "外部视频帧插入")
-        self.assertEqual(editor._frame_ref(4), (video, 0))
-        total = base + 1 + editor.video_sources[video].frames.count
-        self.assertEqual(length(editor.video), total)
+        self.wait_for(lambda: editor.scope is None and video in editor.session.video_sources, "外部视频帧插入")
+        self.assertEqual(editor.session.frame_ref(4), (video, 0))
+        total = base + 1 + editor.session.video_sources[video].frames.count
+        self.assertEqual(length(editor.session.video), total)
         left.setFocus()
         QTest.keyClick(left, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-        self.assertIs(editor.video, video_before)
-        self.assertIs(editor.audio, audio_before)
+        self.assertIs(editor.session.video, video_before)
+        self.assertIs(editor.session.audio, audio_before)
         drop_video()
-        self.assertEqual(length(editor.video), total)
-        self.assertFalse(any(clip.path == video for clip in editor._audio_track()))
+        self.assertEqual(length(editor.session.video), total)
+        self.assertFalse(any(clip.path == video for clip in editor.session.audio_track()))
         with patch("winsound.PlaySound") if sys.platform == "win32" else nullcontext():
             editor._play_video_ranges(((1, 6),))
             self.wait_for(lambda: editor.playback is None, "混合来源帧连续播放")
@@ -479,16 +479,16 @@ class DesktopQueueTest(WorkflowFixture):
         self.assertGreater(marker, 0)
         send_drop(image, wave, release, expected=False)
         send_drop(audio, wave, release)
-        idx = next(i for i, clip in enumerate(editor.audio) if clip.path == audio)
-        self.assertAlmostEqual(length(editor.audio[:idx]), marker, places=6)
-        self.assertEqual(length(editor.video), total)
+        idx = next(i for i, clip in enumerate(editor.session.audio) if clip.path == audio)
+        self.assertAlmostEqual(length(editor.session.audio[:idx]), marker, places=6)
+        self.assertEqual(length(editor.session.video), total)
         self.wait_for(lambda: editor.scope is None and wave.waveform, "插入后波形")
         send_drop(video, wave, release)
-        idx = next(i for i, clip in enumerate(editor.audio) if clip.path == video)
-        self.assertAlmostEqual(length(editor.audio[:idx]), marker, places=6)
-        self.assertEqual(length(editor.video), total)
+        idx = next(i for i, clip in enumerate(editor.session.audio) if clip.path == video)
+        self.assertAlmostEqual(length(editor.session.audio[:idx]), marker, places=6)
+        self.assertEqual(length(editor.session.video), total)
         editor.undo()
-        self.assertFalse(any(clip.path == video for clip in editor.audio))
+        self.assertFalse(any(clip.path == video for clip in editor.session.audio))
 
         editor.tabs.setCurrentWidget(editor.video_page)
         self.wait_for(lambda: editor.scope is None, "视频导出就绪")

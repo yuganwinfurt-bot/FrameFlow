@@ -27,7 +27,7 @@ class EditorPlaybackTest(WorkflowFixture):
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.shown_frame == (self.source, 0), "首帧预览")
+        self.wait_for(lambda: editor.session.frames and editor.shown_frame == (self.source, 0), "首帧预览")
         editor.timeline_zoom.setValue(0)
         self.assertGreater(editor.filmstrip._stride(), 1)
         self.assertEqual(editor.filmstrip.horizontalScrollBar().maximum(), 0)
@@ -36,7 +36,7 @@ class EditorPlaybackTest(WorkflowFixture):
         editor.video_first.setValue(3)
         editor.video_last.setValue(7)
         editor.delete_video()
-        self.assertEqual([(clip.start, clip.end) for clip in editor.video], [(0, 2), (7, 58)])
+        self.assertEqual([(clip.start, clip.end) for clip in editor.session.video], [(0, 2), (7, 58)])
         old_preview = editor.frame_view.original.cacheKey()
         sound = patch("frameflow.playback.WaveOutput") if sys.platform == "win32" else nullcontext()
         with sound as output:
@@ -86,8 +86,8 @@ class EditorPlaybackTest(WorkflowFixture):
         editor = Editor(source, probe(source, self.tools, Processes()), self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "读取短音轨视频")
-        last = editor.frames.count
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "读取短音轨视频")
+        last = editor.session.frames.count
         editor.video_selection = ((3, 7), (12, 15), (last - 5, last))
         with patch("frameflow.playback.WaveOutput"):
             editor.play_video_selection()
@@ -99,7 +99,7 @@ class EditorPlaybackTest(WorkflowFixture):
             self.assertFalse(player.audio_error)
             with wave.open(str(player.wav), "rb") as audio:
                 frames = audio.getnframes()
-                self.assertAlmostEqual(frames / audio.getframerate(), player.count / editor.frames.fps, delta=.002)
+                self.assertAlmostEqual(frames / audio.getframerate(), player.count / editor.session.frames.fps, delta=.002)
                 pcm = array("h", audio.readframes(frames))
             self.assertTrue(any(pcm[:len(pcm) // 2]))
             self.assertFalse(any(pcm[-4000:]))
@@ -167,7 +167,7 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertIsInstance(editor, Editor)
         self.assertFalse(editor.isWindow())
         self.assertEqual(window.navigation.currentIndex(), 1)
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "内嵌视频就绪")
         self.app.processEvents()
         inspector = editor.findChild(QWidget, "studioInspector")
@@ -239,7 +239,7 @@ class EditorPlaybackTest(WorkflowFixture):
         start, end = view.selection
         menu.close()
         QTest.keyClick(view, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
-        self.assertAlmostEqual(length(editor.audio_clipboard), end - start, places=3)
+        self.assertAlmostEqual(length(editor.session.audio_clipboard), end - start, places=3)
         if sys.platform == "win32":
             with patch("winsound.PlaySound"):
                 actions["播放选区"].trigger()
@@ -290,7 +290,7 @@ class EditorPlaybackTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.resize(1160, 820)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "可调整编辑区")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "可调整编辑区")
 
         def drag(splitter, offset):
             handle = splitter.handle(1)
@@ -321,13 +321,13 @@ class EditorPlaybackTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.resize(1160, 820)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "播放器和媒体信息")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "播放器和媒体信息")
         self.app.processEvents()
 
         self.assertTrue(editor.player.isVisible())
         self.assertTrue(editor.player_seek.isVisible())
         self.assertEqual(editor.player_seek.minimum(), 1)
-        self.assertEqual(editor.player_seek.maximum(), editor.frames.count)
+        self.assertEqual(editor.player_seek.maximum(), editor.session.frames.count)
         self.assertEqual(editor.player_seek.value(), editor.cursor.value())
         self.assertTrue(editor.media_summary.isVisible())
         values = [label.text() for label in editor.media_summary.findChildren(QLabel)]
@@ -355,14 +355,14 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertEqual(editor.player_time_current.text(), "00:00.333")
         QTest.mouseClick(editor.player_seek, Qt.MouseButton.LeftButton,
                          pos=QPoint(editor.player_seek.width() - 2, editor.player_seek.height() // 2))
-        self.assertEqual(editor.cursor.value(), editor.frames.count)
+        self.assertEqual(editor.cursor.value(), editor.session.frames.count)
         editor.cursor.setValue(2)
         editor._use_current_frame(editor.video_first)
         editor.cursor.setValue(editor.cursor.maximum())
         editor._use_current_frame(editor.video_last)
         self.assertEqual(editor.video_first.value(), 2)
         self.assertEqual(editor.video_selection, ((2, editor.video_last.value()),))
-        tail = min(25, editor.frames.count)
+        tail = min(25, editor.session.frames.count)
         editor._set_video_range(2, tail)
         editor._range_fields_changed()
         self.assertEqual(editor.video_selection, ((2, tail),))

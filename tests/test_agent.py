@@ -321,7 +321,7 @@ class AgentWorkspaceTest(GuiTestCase):
             self.assertEqual(quality.value(), 23)
             quality.set_measure("CRF")
 
-        self.wait(lambda: editor.frames is not None and editor.scope is None)
+        self.wait(lambda: editor.session.frames is not None and editor.scope is None)
         strip = editor.filmstrip
         zoom = editor.timeline_zoom
         bar = strip.horizontalScrollBar()
@@ -539,7 +539,7 @@ class AgentWorkspaceTest(GuiTestCase):
         self.nav(1)
         self.settle()
         editor = window.pages.currentWidget()
-        self.wait(lambda: editor.frames and editor.scope is None)
+        self.wait(lambda: editor.session.frames and editor.scope is None)
         editor._locate_frame(12)
         rail = window.preview_rail.geometry()
         self.nav(2)
@@ -691,7 +691,7 @@ class AgentWorkspaceTest(GuiTestCase):
         self.nav(1)
         self.settle()
         editor = self.window.pages.currentWidget()
-        self.wait(lambda: editor.frames and editor.scope is None)
+        self.wait(lambda: editor.session.frames and editor.scope is None)
         self.nav(2)
         self.settle()
         agent = self.window.agent_tools

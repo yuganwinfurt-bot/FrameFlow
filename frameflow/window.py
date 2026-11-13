@@ -1224,7 +1224,7 @@ class MainWindow(QMainWindow):
         video = editor is not None and editor.video_page is not None and editor.tabs.currentWidget() is editor.video_page
         self.preview_start.setVisible(editor is not None)
         ready = bool(editor is not None and not busy and (
-            (video and editor.frames) or (not video and editor.info is not None)))
+            (video and editor.session.frames) or (not video and editor.info is not None)))
         self.preview_start.setEnabled(ready)
         self.preview_cancel.setEnabled(bool(busy and editor.cancel_button.isEnabled()))
         note = editor.notice.text() if editor is not None else "等待选择媒体"

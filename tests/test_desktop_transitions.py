@@ -297,10 +297,10 @@ class DesktopTransitionsTest(WorkflowFixture):
         window.navigation.setCurrentIndex(1)
         editor = window.pages.currentWidget()
         transition = window.page_transition
-        self.wait_for(lambda: editor.frames and editor.scope is None and not transition.running, "视频预览就绪")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not transition.running, "视频预览就绪")
         editor.settings.quality.setValue(27)
         editor.player_volume.setValue(35)
-        video = tuple(editor.video)
+        video = tuple(editor.session.video)
         with patch("frameflow.playback.WaveOutput"):
             editor.play_button.click()
             player = editor.playback
@@ -318,7 +318,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         window.navigation.setCurrentIndex(1)
         self.wait_for(lambda: not transition.running, "重新进入原编辑器")
         self.assertIs(window.pages.currentWidget(), editor)
-        self.assertEqual(tuple(editor.video), video)
+        self.assertEqual(tuple(editor.session.video), video)
         self.assertEqual(editor.cursor.value(), paused_at)
         self.assertEqual(editor.player_volume.value(), 35)
         self.assertEqual(editor.settings.quality.value(), 27)
@@ -361,7 +361,7 @@ class DesktopTransitionsTest(WorkflowFixture):
 
         window.navigation.setCurrentIndex(1)
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "可导出编辑结果")
         outputs = []
         editor.saved.connect(outputs.append)

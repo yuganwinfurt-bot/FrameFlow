@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QBoxLayout, QDialog, QDoubleSpinBox, QFileDialog,
                                QTabBar, QTabWidget, QVBoxLayout, QWidget,
                                QWidgetAction)
 
+from .edit_session import EditSession
 from .editing import (Clip, Frames, VideoSource, audio_preview, audio_segment, frame_png, index_frames, length,
                       original_audio, render_edit, render_preview_wav, save_picture, slice_track, splice)
 from .details import DetailsView
@@ -128,21 +129,12 @@ class Editor(QDialog):
         self.last_audible_level = 100
         self.playback_muted = False
         self.fullscreen_player = None
-        self.frames = None
+        self.session = EditSession(path, info)
         self.filmstrip = None
-        self.video = []
-        self.video_sources = {}
-        self.imported_images = {}
         self.video_range = None
         self.video_overrides = {}
         self.video_selection = ()
         self.video_drag_origin = (None, {})
-        self.audio = None if isinstance(info, VideoInfo) else (
-            [Clip(path, info.stream, 0, info.duration)] if isinstance(info, AudioInfo) and info.duration else [])
-        self.video_clipboard, self.audio_clipboard = [], []
-        self.video_clipboard_audio = None
-        self.audio_clipboard_video = []
-        self.history = []
         self.audio_range_initialized = False
         self.audio_available = False
         self.wave_track = ()
@@ -477,7 +469,7 @@ class Editor(QDialog):
             self.path, self.info, self.tools, self._initial_directory, side_scroll, side,
             output_stem=self._get_output_stem, page_kind=self._page_kind,
             picture_frame_number=self._picture_frame_number, picture_source=self._picture_source,
-            audio_duration=lambda: length(self._audio_track()), video_timing=self._video_estimate_timing,
+            audio_duration=lambda: length(self.session.audio_track()), video_timing=self._video_estimate_timing,
             task_running=lambda: self.scope is not None,
         )
         side_scroll.setWidget(self.settings)
@@ -811,11 +803,11 @@ class Editor(QDialog):
             if self.frame_scope is not None:
                 self.frame_scope.cancel()
             self._refresh_audio(reset=not self.audio_range_initialized)
-            if self.media_started and self._audio_track():
+            if self.media_started and self.session.audio_track():
                 self.preview_audio()
         else:
             self.stop_audio()
-            if self.frames:
+            if self.session.frames:
                 self.shown_frame = self.failed_frame = None
                 self._sync_frame_preview()
             if page is self.details_page:
@@ -833,10 +825,10 @@ class Editor(QDialog):
         return ""
 
     def _video_estimate_timing(self):
-        duration = self._video_duration()
-        fps = self.frames.fps if self.frames else 0
-        audio_duration = duration if self._audio_track() else 0
-        return duration, fps, audio_duration, all(clip.path == self.path for clip in self.video)
+        duration = self.session.video_duration()
+        fps = self.session.frames.fps if self.session.frames else 0
+        audio_duration = duration if self.session.audio_track() else 0
+        return duration, fps, audio_duration, all(clip.path == self.path for clip in self.session.video)
 
     def mount_settings(self, layout=None):
         if self.settings.mount(layout):
@@ -883,7 +875,7 @@ class Editor(QDialog):
         previous_selection = self.video_selection
         self.video_selection = () if invalid else tuple(merged)
         self.filmstrip.set_selection(self.video_selection)
-        if not self.frames:
+        if not self.session.frames:
             message = "等待读取帧数"
         elif invalid:
             message = "结束帧应大于或等于起始帧"
@@ -988,9 +980,9 @@ class Editor(QDialog):
         elif count > 1:
             menu.addAction("片段另存为…", self.save_video_selection_as)
         menu.addSeparator()
-        menu.addAction("帧前粘贴", self.paste_video_before).setEnabled(bool(self.video_clipboard))
-        menu.addAction("帧后粘贴\tCtrl+V", self.paste_video_after).setEnabled(bool(self.video_clipboard))
-        menu.addAction("撤销\tCtrl+Z", self.undo).setEnabled(bool(self.history))
+        menu.addAction("帧前粘贴", self.paste_video_before).setEnabled(bool(self.session.video_clipboard))
+        menu.addAction("帧后粘贴\tCtrl+V", self.paste_video_after).setEnabled(bool(self.session.video_clipboard))
+        menu.addAction("撤销\tCtrl+Z", self.undo).setEnabled(bool(self.session.history))
         menu.popup(position)
 
     @staticmethod
@@ -1012,7 +1004,7 @@ class Editor(QDialog):
         frame, last = self.video_selection[0]
         if frame != last:
             return
-        path, index = self._frame_ref(frame)
+        path, index = self.session.frame_ref(frame)
         filters = {
             "PNG 图片 (*.png)": "png", "JPEG 图片 (*.jpg *.jpeg)": "jpg",
             "WebP 图片 (*.webp)": "webp", "AVIF 图片 (*.avif)": "avif",
@@ -1040,7 +1032,7 @@ class Editor(QDialog):
             self._notice("不能用保存图片覆盖源视频。")
             return
         quality, limit, png_compression = self.settings.picture_encoding()
-        max_edge, video = self.settings.resolution.currentData(), self.video_sources[path].info
+        max_edge, video = self.settings.resolution.currentData(), self.session.video_sources[path].info
         self._run("正在保存所选帧…",
                   lambda scope: save_picture(self.path, video, index, kind, quality, limit,
                                              target.parent, self.tools, scope,
@@ -1052,7 +1044,7 @@ class Editor(QDialog):
         if not self._ready_video() or not self.video_selection:
             return
         video, audio = self._video_range_tracks(self.video_selection)
-        fps = self.frames.fps
+        fps = self.session.frames.fps
         formats = {
             "MP4 视频 (*.mp4)": ("mp4", "mp4"),
             "MP4 视频 H.265 (*.mp4)": ("mp4_hevc", "mp4"),
@@ -1157,7 +1149,7 @@ class Editor(QDialog):
             if scope.cancelled.is_set():
                 error = "已取消素材插入。"
         if self.filmstrip is not None:
-            self.play_button.setEnabled(self.frames is not None)
+            self.play_button.setEnabled(self.session.frames is not None)
             self._update_locate_button()
         self.cancel_button.setEnabled(False)
         self.settings.picture_group.setEnabled(True)
@@ -1181,7 +1173,7 @@ class Editor(QDialog):
             done(result)
         self._update_audio_toolbar()
         self.task_changed.emit()
-        if self.frames and self._frame_preview_panel() is not None and self.requested_frame != self.shown_frame:
+        if self.session.frames and self._frame_preview_panel() is not None and self.requested_frame != self.shown_frame:
             self.seek_timer.start()
         if self.scope is None and self.wave_pending and self.tabs.currentWidget() is self.audio_page:
             self.wave_reload.start()
@@ -1211,9 +1203,7 @@ class Editor(QDialog):
         self._display(self.image_view, data)
 
     def _indexed(self, frames):
-        self.frames = frames
-        self.video_sources[self.path] = VideoSource(self.info, frames, self.path.name)
-        self.video = [Clip(self.path, self.info.stream, 0, frames.count)]
+        self.session.set_index(frames)
         self.previous_frame_button.setEnabled(True)
         self.play_button.setEnabled(True)
         self.next_frame_button.setEnabled(True)
@@ -1221,12 +1211,12 @@ class Editor(QDialog):
         self._refresh_video()
         if self.tabs.currentWidget() is self.audio_page:
             self._refresh_audio(reset=True)
-            if self._audio_track():
+            if self.session.audio_track():
                 self.preview_audio()
 
     def _refresh_video(self):
-        count = int(length(self.video))
-        self.filmstrip.set_track(self.video, self.frames, self.video_sources)
+        count = int(length(self.session.video))
+        self.filmstrip.set_track(self.session.video, self.session.frames, self.session.video_sources)
         with QSignalBlocker(self.player_seek):
             self.player_seek.setRange(1, count)
         with QSignalBlocker(self.video_first), QSignalBlocker(self.video_last):
@@ -1248,31 +1238,25 @@ class Editor(QDialog):
         self._stop_playback()
         self._sync_cursor(value)
 
-    def _frame_ref(self, value):
-        clips = slice_track(self.video, value - 1, value)
-        if clips:
-            return clips[0].path, int(clips[0].start)
-        return None
-
     def _sync_cursor(self, value, *, playing=False):
-        if not self.frames:
+        if not self.session.frames:
             return
         self.filmstrip.set_current(value, playing=playing)
         with QSignalBlocker(self.player_seek):
             self.player_seek.setValue(value)
-        self.player_time_current.setText(_timecode((value - 1) / self.frames.fps))
+        self.player_time_current.setText(_timecode((value - 1) / self.session.frames.fps))
         self.player_time_short.setText(self.player_time_current.text().split(".")[0])
-        self.player_time_total.setText(_timecode(length(self.video) / self.frames.fps))
+        self.player_time_total.setText(_timecode(length(self.session.video) / self.session.frames.fps))
         self._sync_frame_preview(playing=playing)
         self.settings.update_output_location()
 
     def _seek_from_player(self, value):
-        if self.frames is not None and value != self.cursor.value():
+        if self.session.frames is not None and value != self.cursor.value():
             self.cursor.setValue(value)
 
     def _frame_position(self, value):
-        seconds = (value - 1) / self.frames.fps
-        return f"第 {value} / {int(length(self.video))} 帧 · {seconds:.3f} 秒"
+        seconds = (value - 1) / self.session.frames.fps
+        return f"第 {value} / {int(length(self.session.video))} 帧 · {seconds:.3f} 秒"
 
     def _picture_frame_number(self):
         if self.tabs.currentWidget() is self.image_page:
@@ -1293,13 +1277,13 @@ class Editor(QDialog):
         if panel is None:
             return
         value = self._picture_frame_number()
-        frame = self._frame_ref(value)
+        frame = self.session.frame_ref(value)
         if frame is None:
             return
         path, index = frame
         origin = f" · 原始第 {index + 1} 帧" if index != value - 1 else ""
         if path != self.path:
-            origin = f" · {self.video_sources[path].name} 第 {index + 1} 帧"
+            origin = f" · {self.session.video_sources[path].name} 第 {index + 1} 帧"
         self.settings.picture_caption.setText(self._frame_position(value) + origin)
         self.settings.picture_save.setText(f"保存第 {value} 帧")
         if not playing and panel is self.image_view:
@@ -1336,7 +1320,7 @@ class Editor(QDialog):
             return
         self.frame_inflight = frame
         self.frame_scope = Processes()
-        self.frame_pool.submit(self._decode_frame, frame, self.video_sources[frame[0]].info, self.frame_scope)
+        self.frame_pool.submit(self._decode_frame, frame, self.session.video_sources[frame[0]].info, self.frame_scope)
 
     def _decode_frame(self, frame, info, scope):
         path, index = frame
@@ -1388,7 +1372,7 @@ class Editor(QDialog):
             return
         if not self._ready_video():
             return
-        total = int(length(self.video))
+        total = int(length(self.session.video))
         start = self.cursor.value()
         self._play_video_ranges(((1 if start == total else start, total),))
 
@@ -1502,13 +1486,13 @@ class Editor(QDialog):
             self._play_video_ranges(self.video_selection)
 
     def _video_range_tracks(self, ranges):
-        video = [clip for first, last in ranges for clip in slice_track(self.video, first - 1, last)]
-        if self.audio is None:
-            audio = original_audio(video, self.frames, self.info.audio_stream)
+        video = [clip for first, last in ranges for clip in slice_track(self.session.video, first - 1, last)]
+        if self.session.audio is None:
+            audio = original_audio(video, self.session.frames, self.info.audio_stream)
         else:
-            fps = self.frames.fps
+            fps = self.session.frames.fps
             audio = [clip for first, last in ranges
-                     for clip in audio_segment(self.audio, (first - 1) / fps, last / fps)] if self.audio else []
+                     for clip in audio_segment(self.session.audio, (first - 1) / fps, last / fps)] if self.session.audio else []
         return video, audio
 
     def _play_video_ranges(self, ranges):
@@ -1519,7 +1503,7 @@ class Editor(QDialog):
             self.frame_scope.cancel()
         self.playback_ranges = tuple(ranges)
         video, audio = self._video_range_tracks(self.playback_ranges)
-        self.playback = Playback(video, audio, self.frames.fps, self.tools,
+        self.playback = Playback(video, audio, self.session.frames.fps, self.tools,
                                  Path(self.scratch.name) / "timeline.wav", canvas=self._canvas_for(video),
                                  volume=0 if self.playback_muted else self.playback_level / 100)
         self._notice("正在准备剪辑预览…")
@@ -1583,7 +1567,7 @@ class Editor(QDialog):
         self.cursor.stepUp()
 
     def _ready_video(self):
-        return self.frames is not None and self.scope is None
+        return self.session.frames is not None and self.scope is None
 
     def _timeline_command(self, command):
         actions = {"copy": self.copy_video, "cut": self.cut_video,
@@ -1593,21 +1577,12 @@ class Editor(QDialog):
 
     def copy_video(self):
         if self._ready_video() and self.video_selection:
-            self.video_clipboard = [clip for first, last in self.video_selection
-                                    for clip in slice_track(self.video, first - 1, last)]
-            fps = self.frames.fps
-            self.video_clipboard_audio = None if self.audio is None else [
-                clip for first, last in self.video_selection
-                for clip in audio_segment(self.audio, (first - 1) / fps, last / fps)
-            ]
-            self._notice(f"已复制 {int(length(self.video_clipboard))} 帧。")
+            count = self.session.copy_video(self.video_selection)
+            self._notice(f"已复制 {count} 帧。")
 
     def cut_video(self):
         self.copy_video()
         self.delete_video()
-
-    def _remember(self):
-        self.history.append((self.video, self.audio))
 
     def delete_video(self):
         if self._ready_video() and self.video_selection:
@@ -1615,24 +1590,16 @@ class Editor(QDialog):
 
     def _remove_video_ranges(self, ranges, *, audio_tail_end=None):
         """按当前时间线剪掉同一范围，一次撤销恢复两轨。"""
-        if sum(end - start for start, end in ranges) >= length(self.video):
+        tracks = self.session.cut_tracks(ranges, audio_tail_end=audio_tail_end)
+        if tracks is None:
             self._notice("至少保留一帧。")
             return False
-        video, audio = self.video, self.audio
-        fps = self.frames.fps
-        if audio is not None and audio_tail_end is not None:
-            audio = splice(audio, self._video_duration(), audio_tail_end)
-        for start, end in reversed(ranges):
-            video = splice(video, start, end)
-            if audio is not None:
-                audio = splice(audio, start / fps, end / fps)
         self._stop_playback()
         self.stop_audio()
-        self._remember()
-        self.video, self.audio = video, audio
+        self.session.replace_tracks(*tracks)
         self._refresh_video()
         self._refresh_audio(reset=True)
-        if self.tabs.currentWidget() is self.audio_page and self._audio_track():
+        if self.tabs.currentWidget() is self.audio_page and self.session.audio_track():
             self.preview_audio()
         else:
             self._notice("已裁剪所选片段。")
@@ -1645,8 +1612,8 @@ class Editor(QDialog):
         self._paste_video(self.cursor.value())
 
     def _paste_video(self, position):
-        if self._ready_video() and self.video_clipboard:
-            self._insert_video(position, self.video_clipboard, self.video_clipboard_audio)
+        if self._ready_video() and self.session.video_clipboard:
+            self._insert_video(position, self.session.video_clipboard, self.session.video_clipboard_audio)
 
     def _queued_source(self, key):
         return self.lookup_media(key) if key and self.lookup_media and not self.closing else None
@@ -1661,28 +1628,13 @@ class Editor(QDialog):
     def _move_video_ranges(self, ranges, position):
         if not self._ready_video():
             return
-        count = sum(end - start for start, end in ranges)
-        total = length(self.video)
-        if not 0 < count < total or not 0 <= position <= total - count:
+        tracks = self.session.moved_tracks(ranges, position)
+        if tracks is None:
             return
-        if len(ranges) == 1 and position == ranges[0][0]:
-            return
-
-        def move(track, units):
-            clips = [clip for start, end in ranges for clip in slice_track(track, start / units, end / units)]
-            for start, end in reversed(ranges):
-                track = splice(track, start / units, end / units)
-            return splice(track, position / units, position / units, clips)
-
-        video = move(self.video, 1)
-        audio = self.audio
-        if audio:
-            fps = self.frames.fps
-            audio = move(audio_segment(audio, 0, max(length(audio), total / fps)), fps)
+        count, video, audio = tracks
         self._stop_playback()
         self.stop_audio()
-        self._remember()
-        self.video, self.audio = video, audio
+        self.session.replace_tracks(video, audio)
         self._refresh_video()
         self._refresh_audio(reset=True)
         self._set_video_range(position + 1, position + count)
@@ -1698,20 +1650,18 @@ class Editor(QDialog):
             self._notice("找不到要插入的文件。")
             self.missing_source.emit(path)
             return
-        cached = self.imported_images.get(path, path)
+        cached = self.session.source_for(path)
 
         def insert(result):
             clip_path, source = result
-            self.video_sources[clip_path] = source
-            if isinstance(info, ImageInfo):
-                self.imported_images[path] = clip_path
+            self.session.register_source(clip_path, source, image_path=path if isinstance(info, ImageInfo) else None)
             clip = Clip(clip_path, source.info.stream, 0, source.frames.count)
             self._insert_video(position, [clip], [])
             self._locate_frame(position + 1)
             self._notice(f"已在第 {position + 1} 帧处插入 {source.frames.count} 帧。")
 
-        if cached in self.video_sources:
-            insert((cached, self.video_sources[cached]))
+        if cached is not None:
+            insert(cached)
         else:
             self._run("正在读取拖入的画面…", lambda scope: self._load_dropped_video(path, info, scope), insert)
             self.pending_video_insert = self.scope
@@ -1723,7 +1673,7 @@ class Editor(QDialog):
         clip_path = Path(self.scratch.name) / f"still-{uuid4().hex}.png"
         _save_image(path, clip_path, "PNG")
         scope.check()
-        fps = self.frames.fps
+        fps = self.session.frames.fps
         frames = Frames((0.0,), 1 / fps, fps)
         video = VideoInfo(0, frames.duration, info.width, info.height, fps, "PNG", clip_path.stat().st_size)
         return clip_path, VideoSource(video, frames, path.name)
@@ -1731,32 +1681,19 @@ class Editor(QDialog):
     def _insert_video(self, position, video, audio):
         self._stop_playback()
         self.stop_audio()
-        self._remember()
-        if self.audio is not None or audio is not None:
-            time = position / self.frames.fps
-            current = self._audio_track()
-            copied = original_audio(video, self.frames, self.info.audio_stream) if audio is None else audio
-            duration = length(video) / self.frames.fps
-            self.audio = ([*audio_segment(current, 0, time), *audio_segment(copied, 0, duration),
-                           *slice_track(current, time, length(current))] if current or copied else [])
-        self.video = splice(self.video, position, position, video)
+        self.session.insert_video(position, video, audio)
         self._refresh_video()
         self._refresh_audio(reset=True)
-        if self.tabs.currentWidget() is self.audio_page and self._audio_track():
+        if self.tabs.currentWidget() is self.audio_page and self.session.audio_track():
             self.preview_audio()
 
-    def _audio_track(self):
-        if self.audio is not None:
-            return self.audio
-        return original_audio(self.video, self.frames, self.info.audio_stream) if self.frames else []
-
     def _refresh_audio(self, *, reset=False):
-        track = self._audio_track()
+        track = self.session.audio_track()
         total = length(track)
         self.settings.refresh_estimate()
-        video_end = self._video_duration()
-        self.audio_view.set_overflow((video_end, total) if self.frames and total - video_end > .0005 else None)
-        empty = length(self.video) / self.frames.fps if self.frames and not track else 0
+        video_end = self.session.video_duration()
+        self.audio_view.set_overflow((video_end, total) if self.session.frames and total - video_end > .0005 else None)
+        empty = length(self.session.video) / self.session.frames.fps if self.session.frames and not track else 0
         self.audio_view.empty_duration = empty or (1.0 if not track else 0)
         if self.audio_view.insertion is not None:
             self.audio_view.insertion = min(self.audio_view.insertion, max(total, empty))
@@ -1808,7 +1745,7 @@ class Editor(QDialog):
                 self._focus_audio_window(start, start + 30)
 
     def _focus_audio_window(self, start, end):
-        total = length(self._audio_track())
+        total = length(self.session.audio_track())
         span = min(total, end - start)
         if span > 0:
             start = max(0, min(start, total - span))
@@ -1826,9 +1763,9 @@ class Editor(QDialog):
         mark = self.audio_view.trim_mark
         if self.scope is None and mark:
             start, end = mark
-            updated = splice(self._audio_track(), start, end)
+            updated = splice(self.session.audio_track(), start, end)
             self._change_audio(updated)
-            suffix = "，音画时长已对齐。" if abs(length(updated) - self._video_duration()) < .0005 else "。"
+            suffix = "，音画时长已对齐。" if abs(length(updated) - self.session.video_duration()) < .0005 else "。"
             self._notice(f"已删除 {end - start:.3f} 秒标红音频{suffix}")
 
     @Slot(float, float)
@@ -1854,7 +1791,7 @@ class Editor(QDialog):
         self.audio_view.update()
 
     def _click_audio(self, position):
-        if not self.audio_available and not self.frames:
+        if not self.audio_available and not self.session.frames:
             position = 0.0
         self.audio_first.setValue(position)
         self.audio_last.setValue(position)
@@ -1863,7 +1800,7 @@ class Editor(QDialog):
 
     def _can_drop_audio(self, key):
         source = self._queued_source(key)
-        if self.scope is not None or not source or (self.video_page is not None and not self.frames):
+        if self.scope is not None or not source or (self.video_page is not None and not self.session.frames):
             return False
         info = source[1]
         return bool((isinstance(info, AudioInfo) or
@@ -1879,10 +1816,10 @@ class Editor(QDialog):
             return
         stream = info.stream if isinstance(info, AudioInfo) else info.audio_stream
         clip = Clip(path, stream, 0, info.duration)
-        track = self._audio_track()
+        track = self.session.audio_track()
         inserted = [*audio_segment(track, 0, position), clip, *slice_track(track, position, length(track))]
-        if self.frames:
-            duration = max(length(inserted), length(self.video) / self.frames.fps)
+        if self.session.frames:
+            duration = max(length(inserted), length(self.session.video) / self.session.frames.fps)
             inserted = audio_segment(inserted, 0, duration)
         self._change_audio(inserted)
         self._notice(f"已在 {position:.3f} 秒插入音频。")
@@ -1917,9 +1854,9 @@ class Editor(QDialog):
         menu.addAction("剪切\tCtrl+X", self.cut_audio).setEnabled(selected)
         if not on_mark:
             menu.addAction("删除", self.delete_audio).setEnabled(selected)
-        menu.addAction("粘贴\tCtrl+V", self.paste_audio).setEnabled(ready and bool(self.audio_clipboard))
+        menu.addAction("粘贴\tCtrl+V", self.paste_audio).setEnabled(ready and bool(self.session.audio_clipboard))
         menu.addAction("插入音频…", self.insert_audio).setEnabled(ready)
-        menu.addAction("撤销\tCtrl+Z", self.undo).setEnabled(ready and bool(self.history))
+        menu.addAction("撤销\tCtrl+Z", self.undo).setEnabled(ready and bool(self.session.history))
         menu.popup(global_position)
 
     def _audio_command(self, command):
@@ -1929,35 +1866,20 @@ class Editor(QDialog):
 
     def _selection_audio(self):
         first, last = self.audio_first.value(), self.audio_last.value()
-        track = self._audio_track()
+        track = self.session.audio_track()
         total = length(track)
         if last > first and abs(last - total) <= .0005:
             last = total
         return first, last, track
 
-    def _video_duration(self):
-        return length(self.video) / self.frames.fps if self.frames else 0.0
-
-    def _audio_frames(self, start, end):
-        """按秒选中的区间覆盖整帧，容忍输入框的毫秒舍入误差。"""
-        fps = self.frames.fps
-        total = int(length(self.video))
-        first = min(total - 1, floor((start + .0005) * fps))
-        last = min(total, max(first + 1, ceil((end - .0005) * fps)))
-        return first, last
-
     def copy_audio(self):
         if self.scope is None:
             start, end, track = self._selection_audio()
-            selected = slice_track(track, start, end)
-            if not selected:
-                return
-            self.audio_clipboard_video = []
-            self.audio_clipboard = selected
-            self._notice(f"已复制 {length(self.audio_clipboard):.3f} 秒。")
+            if duration := self.session.copy_audio(start, end, track):
+                self._notice(f"已复制 {duration:.3f} 秒。")
 
     def cut_audio(self):
-        if self.video_page is not None and (not self.frames or self.audio_first.value() < self._video_duration() - .0005):
+        if self.video_page is not None and (not self.session.frames or self.audio_first.value() < self.session.video_duration() - .0005):
             self._cut_audio_with_video()
             return
         self.copy_audio()
@@ -1967,20 +1889,16 @@ class Editor(QDialog):
         start, end, track = self._selection_audio()
         if not self._ready_video() or end <= start:
             return
-        if end > self._video_duration() + .0005:
+        if end > self.session.video_duration() + .0005:
             self._notice("选区跨过视频结尾，请分开剪切，或删除标红音频。")
             return
-        first, last = self._audio_frames(start, end)
-        video = slice_track(self.video, first, last)
-        fps = self.frames.fps
-        audio = (original_audio(video, self.frames, self.info.audio_stream) if self.audio is None
-                 else audio_segment(track, first / fps, last / fps))
+        first, last = self.session.audio_frames(start, end)
+        video, audio = self.session.linked_audio_selection(first, last, track)
         if self._remove_video_ranges([(first, last)]):
-            self.audio_clipboard_video, self.audio_clipboard = video, audio
+            self.session.set_audio_clipboard(video, audio)
 
     def _change_audio(self, track):
-        self._remember()
-        self.audio = track
+        self.session.replace_audio(track)
         self.stop_audio()
         self._refresh_audio()
         self.wave_reload.start()
@@ -1988,21 +1906,21 @@ class Editor(QDialog):
     def delete_audio(self):
         start, end, track = self._selection_audio()
         if self.scope is None and end > start:
-            video_end = self._video_duration()
-            if self.video_page is None or (self.frames and start >= video_end - .0005):
+            video_end = self.session.video_duration()
+            if self.video_page is None or (self.session.frames and start >= video_end - .0005):
                 self._change_audio(splice(track, start, end))
-            elif self.frames:
+            elif self.session.frames:
                 tail = end if end > video_end + .0005 else None
-                self._remove_video_ranges([self._audio_frames(start, end)], audio_tail_end=tail)
+                self._remove_video_ranges([self.session.audio_frames(start, end)], audio_tail_end=tail)
 
     def paste_audio(self):
-        if self.scope is None and self.audio_clipboard:
+        if self.scope is None and self.session.audio_clipboard:
             position = self.audio_cursor.value()
-            if self.frames and self.audio_clipboard_video:
-                frame = min(int(length(self.video)), round(position * self.frames.fps))
-                self._insert_video(frame, self.audio_clipboard_video, self.audio_clipboard)
+            if self.session.frames and self.session.audio_clipboard_video:
+                frame = min(int(length(self.session.video)), round(position * self.session.frames.fps))
+                self._insert_video(frame, self.session.audio_clipboard_video, self.session.audio_clipboard)
             else:
-                self._change_audio(splice(self._audio_track(), position, position, self.audio_clipboard))
+                self._change_audio(splice(self.session.audio_track(), position, position, self.session.audio_clipboard))
 
     def set_volume(self):
         start, end, track = self._selection_audio()
@@ -2019,7 +1937,7 @@ class Editor(QDialog):
             return
         path = Path(name).resolve()
         position = self.audio_cursor.value()
-        track = self._audio_track()
+        track = self.session.audio_track()
         def load(scope):
             info = probe(path, self.tools, scope)
             if not isinstance(info, AudioInfo) or not info.duration:
@@ -2031,10 +1949,10 @@ class Editor(QDialog):
         if self.pending_video_insert is not None:
             self.cancel_operation()
             return
-        if self.scope is None and self.history:
+        if self.scope is None and self.session.history:
             self._stop_playback()
-            self.video, self.audio = self.history.pop()
-            if self.frames:
+            self.session.undo()
+            if self.session.frames:
                 self._refresh_video()
             if self.audio_page:
                 self._refresh_audio(reset=True)
@@ -2065,7 +1983,7 @@ class Editor(QDialog):
             self.wave_pending = self.audio_available
             return
         self.wave_pending = False
-        track = self._audio_track()
+        track = self.session.audio_track()
         loaded = self.audio_view.loaded_interval
         start = focus[0] if focus else (loaded[0] if loaded else self.audio_view.playhead)
         total = length(track)
@@ -2150,7 +2068,7 @@ class Editor(QDialog):
         self.zoom_ratio.setText(f"采样点 · {span * 1000:.2f} ms" if view.sample_spacing() >= 3 else f"{factor}×")
         self.zoom_in.setEnabled(bool(loaded and span > view.minimum_span() * 1.001))
         self.zoom_out.setEnabled(ratio > 1.001)
-        self.zoom_reset.setEnabled(bool(self.audio_available or self.frames) and self.scope is None)
+        self.zoom_reset.setEnabled(bool(self.audio_available or self.session.frames) and self.scope is None)
 
     def _seek_audio(self, position):
         self.stop_audio()
@@ -2193,7 +2111,7 @@ class Editor(QDialog):
 
     def _play_audio_from(self, position):
         self._click_audio(position)
-        track = self._audio_track()
+        track = self.session.audio_track()
         end = min(length(track), position + 30)
         self._play_audio_range(position, end, track)
 
@@ -2264,15 +2182,15 @@ class Editor(QDialog):
     def save_edit(self):
         if self.scope is not None:
             return
-        video = self.video if self.tabs.currentWidget() is self.video_page else []
-        audio = self._audio_track()
+        video = self.session.video if self.tabs.currentWidget() is self.video_page else []
+        audio = self.session.audio_track()
         options = self.output_options()
         if options.format in _AUDIO_ENCODERS:
             video = []
         if not video and not audio:
             self._notice("请先载入有效的帧或音频片段。")
             return
-        fps = self.frames.fps if self.frames else 0
+        fps = self.session.frames.fps if self.session.frames else 0
         canvas = self._canvas_for(video)
         self._run("正在保存编辑结果…",
                   lambda scope: render_edit(self.path, video, audio, fps, options, self.tools,
@@ -2283,13 +2201,13 @@ class Editor(QDialog):
     def _picture_source(self):
         if isinstance(self.info, ImageInfo):
             return self.path, None, 0, self.info.width, self.info.height
-        if not self.frames:
+        if not self.session.frames:
             return None
-        reference = self._frame_ref(self._picture_frame_number())
+        reference = self.session.frame_ref(self._picture_frame_number())
         if reference is None:
             return None
         path, index = reference
-        info = self.video_sources[path].info
+        info = self.session.video_sources[path].info
         return path, info, index, info.width, info.height
 
     def _schedule_picture_estimate(self, *_):
@@ -2375,11 +2293,11 @@ class Editor(QDialog):
         if self.scope is not None:
             return
         is_video = isinstance(self.info, VideoInfo)
-        if is_video and not self.frames:
+        if is_video and not self.session.frames:
             return
         frame = self._picture_frame_number() if is_video else None
-        path, index = self._frame_ref(frame) if is_video else (self.path, 0)
-        video = self.video_sources[path].info if is_video else None
+        path, index = self.session.frame_ref(frame) if is_video else (self.path, 0)
+        video = self.session.video_sources[path].info if is_video else None
         kind = self.settings.image_format.currentData()
         quality, limit, png_compression = self.settings.picture_encoding()
         directory, max_edge = self.settings.directory, self.settings.resolution.currentData()
@@ -2414,7 +2332,7 @@ class Editor(QDialog):
             self.frame_scope.cancel()
 
     def resume(self):
-        if self.frames and self._frame_preview_panel() is not None:
+        if self.session.frames and self._frame_preview_panel() is not None:
             self.seek_timer.start()
             if self.settings.uses_picture_estimate():
                 self._schedule_picture_estimate()

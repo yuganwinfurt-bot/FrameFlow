@@ -38,7 +38,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.saved.connect(window._register_editor_output)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.frame_view.original and editor.scope is None, "实际帧数和预览")
+        self.wait_for(lambda: editor.session.frames and editor.frame_view.original and editor.scope is None, "实际帧数和预览")
         editor.settings.refresh_density()
         self.assertTrue(editor.settings.mode_hint.isVisible())
         self.assertIn("手动设置编码", editor.settings.mode_hint.text())
@@ -57,16 +57,16 @@ class EditorTimelineTest(WorkflowFixture):
         editor.settings.limit_toggle.click()
         self.assertFalse(editor.settings.limit_row.isVisible())
         self.assertEqual(editor.settings.estimate_rows["output"].objectName(), "estimateValueStrong")
-        total = editor.frames.count
+        total = editor.session.frames.count
         self.assertEqual(total, 58)
         self.assertEqual([editor.tabs.tabText(i) for i in range(editor.tabs.count())],
                          ["视频帧", "音轨", "图片", "文件详情"])
         editor.video_first.setValue(2)
         editor.video_last.setValue(4)
         editor.cut_video()
-        self.assertEqual(int(sum(c.length for c in editor.video)), total - 3)
+        self.assertEqual(int(sum(c.length for c in editor.session.video)), total - 3)
         editor.paste_video_after()
-        self.assertEqual(int(sum(c.length for c in editor.video)), total)
+        self.assertEqual(int(sum(c.length for c in editor.session.video)), total)
         editor.cursor.setValue(3)
         self.wait_for(lambda: editor.shown_frame == (self.source, 2) and editor.scope is None, "重新定位帧")
         editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("jpg"))
@@ -109,9 +109,9 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertFalse(hasattr(strip, "overview"))
         editor.locate_input.setText("9999")
         self.assertFalse(editor.locate_button.isEnabled())
-        editor.locate_input.setText(str(editor.frames.count))
+        editor.locate_input.setText(str(editor.session.frames.count))
         QTest.keyClick(editor.locate_input, Qt.Key.Key_Return)
-        self.assertEqual(editor.cursor.value(), editor.frames.count)
+        self.assertEqual(editor.cursor.value(), editor.session.frames.count)
         editor.locate_input.setText("1")
         QTest.mouseClick(editor.locate_button, Qt.MouseButton.LeftButton)
         self.assertEqual(editor.cursor.value(), 1)
@@ -161,7 +161,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
         strip = editor.filmstrip
-        self.wait_for(lambda: editor.frames and editor.scope is None, "视频帧索引")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "视频帧索引")
         scroll = strip.horizontalScrollBar()
         scroll.setValue(0)
         start = strip._tile_rect(1).center()
@@ -252,14 +252,14 @@ class EditorTimelineTest(WorkflowFixture):
         editor._set_video_range(6, 8)
         editor._update_range_marker()
         QTest.keyClick(strip, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(int(length(editor.video_clipboard)), 3)
-        original_count = int(length(editor.video))
+        self.assertEqual(int(length(editor.session.video_clipboard)), 3)
+        original_count = int(length(editor.session.video))
         QTest.keyClick(strip, Qt.Key.Key_X, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(int(length(editor.video)), original_count - 3)
+        self.assertEqual(int(length(editor.session.video)), original_count - 3)
         QTest.keyClick(strip, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(int(length(editor.video)), original_count)
+        self.assertEqual(int(length(editor.session.video)), original_count)
         QTest.keyClick(strip, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
-        self.assertEqual(int(length(editor.video)), original_count + 3)
+        self.assertEqual(int(length(editor.session.video)), original_count + 3)
 
     def test_shift_extends_both_sides_and_ctrl_toggles_one_frame(self):
         source = self.root / "多帧样片.mov"
@@ -268,7 +268,7 @@ class EditorTimelineTest(WorkflowFixture):
         editor = Editor(source, probe(source, self.tools, Processes()), self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "多帧样片索引")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "多帧样片索引")
         strip = editor.filmstrip
 
         def click(frame, modifier=Qt.KeyboardModifier.NoModifier):
@@ -293,10 +293,10 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertEqual(strip.selection, ((1, 20),))
         click(80, ctrl)
         editor.cut_video()
-        self.assertEqual([(clip.start, clip.end) for clip in editor.video_clipboard], [(0, 20), (79, 80)])
-        self.assertEqual([(clip.start, clip.end) for clip in editor.video], [(20, 79), (80, editor.frames.count)])
+        self.assertEqual([(clip.start, clip.end) for clip in editor.session.video_clipboard], [(0, 20), (79, 80)])
+        self.assertEqual([(clip.start, clip.end) for clip in editor.session.video], [(20, 79), (80, editor.session.frames.count)])
         editor.undo()
-        self.assertEqual([(clip.start, clip.end) for clip in editor.video], [(0, editor.frames.count)])
+        self.assertEqual([(clip.start, clip.end) for clip in editor.session.video], [(0, editor.session.frames.count)])
 
         click(20)
         click(30, shift)
@@ -314,30 +314,30 @@ class EditorTimelineTest(WorkflowFixture):
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "加载带音轨的视频")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "加载带音轨的视频")
         editor.tabs.setCurrentWidget(editor.audio_page)
         self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "音轨波形")
-        frames = editor.frames.count
-        fps = editor.frames.fps
+        frames = editor.session.frames.count
+        fps = editor.session.frames.fps
 
         # 毫秒精度的结束值 .417 秒恰好指向第十帧边界，不多删第十一帧。
         editor.audio_first.setValue(.168)
         editor.audio_last.setValue(.417)
         editor.cut_audio()
         self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "剪切后重绘波形")
-        self.assertEqual([(c.start, c.end) for c in editor.video], [(0, 4), (10, frames)])
-        self.assertAlmostEqual(length(editor._audio_track()), (frames - 6) / fps)
-        self.assertEqual((editor.audio_clipboard_video[0].start, editor.audio_clipboard_video[0].end), (4, 10))
+        self.assertEqual([(c.start, c.end) for c in editor.session.video], [(0, 4), (10, frames)])
+        self.assertAlmostEqual(length(editor.session.audio_track()), (frames - 6) / fps)
+        self.assertEqual((editor.session.audio_clipboard_video[0].start, editor.session.audio_clipboard_video[0].end), (4, 10))
         editor.audio_cursor.setValue(4 / fps)
         editor.paste_audio()
         self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "粘贴同步恢复两轨")
-        self.assertEqual([(c.start, c.end) for c in editor.video], [(0, 4), (4, 10), (10, frames)])
-        self.assertAlmostEqual(length(editor._audio_track()), frames / fps)
+        self.assertEqual([(c.start, c.end) for c in editor.session.video], [(0, 4), (4, 10), (10, frames)])
+        self.assertAlmostEqual(length(editor.session.audio_track()), frames / fps)
         editor.undo()
-        self.assertAlmostEqual(length(editor._audio_track()), (frames - 6) / fps)
+        self.assertAlmostEqual(length(editor.session.audio_track()), (frames - 6) / fps)
         editor.undo()
-        self.assertEqual(len(editor.video), 1)
-        self.assertIsNone(editor.audio)
+        self.assertEqual(len(editor.session.video), 1)
+        self.assertIsNone(editor.session.audio)
 
         # 调过音量的轨道也必须按当前时间线同步裁剪，保留音量设置。
         editor.audio_first.setValue(0)
@@ -348,11 +348,11 @@ class EditorTimelineTest(WorkflowFixture):
         editor.video_first.setValue(13)
         editor.video_last.setValue(24)
         editor.delete_video()
-        self.assertEqual([(c.start, c.end) for c in editor.video], [(0, 12), (24, frames)])
-        self.assertEqual(editor._frame_ref(int(length(editor.video))), (self.source, frames - 1))
-        self.assertAlmostEqual(length(editor.audio), (frames - 12) / fps)
-        self.assertAlmostEqual(editor.audio[1].start, 1, delta=.001)
-        self.assertEqual({c.volume for c in editor.audio}, {.35})
+        self.assertEqual([(c.start, c.end) for c in editor.session.video], [(0, 12), (24, frames)])
+        self.assertEqual(editor.session.frame_ref(int(length(editor.session.video))), (self.source, frames - 1))
+        self.assertAlmostEqual(length(editor.session.audio), (frames - 12) / fps)
+        self.assertAlmostEqual(editor.session.audio[1].start, 1, delta=.001)
+        self.assertEqual({c.volume for c in editor.session.audio}, {.35})
         outputs = []
         editor.saved.connect(outputs.append)
         editor.save_edit()
@@ -382,16 +382,16 @@ class EditorTimelineTest(WorkflowFixture):
         editor.audio_first.setValue(0)
         editor.audio_last.setValue(.5)
         editor.cut_audio()
-        self.assertAlmostEqual(sum(c.length for c in editor.audio), info.duration - .5, delta=.01)
+        self.assertAlmostEqual(sum(c.length for c in editor.session.audio), info.duration - .5, delta=.01)
         editor.audio_cursor.setValue(.4)
         editor.paste_audio()
-        self.assertAlmostEqual(sum(c.length for c in editor.audio), info.duration, delta=.01)
+        self.assertAlmostEqual(sum(c.length for c in editor.session.audio), info.duration, delta=.01)
         editor.volume.setValue(40)
         editor.set_volume()
-        self.assertTrue(any(clip.volume == .4 for clip in editor.audio))
+        self.assertTrue(any(clip.volume == .4 for clip in editor.session.audio))
         with patch("frameflow.editor.QFileDialog.getOpenFileName", return_value=(str(source), "")):
             editor.insert_audio()
-        self.wait_for(lambda: editor.scope is None and sum(c.length for c in editor.audio) > info.duration, "插入音频")
+        self.wait_for(lambda: editor.scope is None and sum(c.length for c in editor.session.audio) > info.duration, "插入音频")
         outputs = []
         editor.saved.connect(outputs.append)
         editor.settings.format.setCurrentIndex(editor.settings.format.findData("wav"))
@@ -411,12 +411,12 @@ class EditorTimelineTest(WorkflowFixture):
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "队列")
         window.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running, "时间轴")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running, "时间轴")
         strip = editor.filmstrip
-        original = editor.video
-        fps = editor.frames.fps
+        original = editor.session.video
+        fps = editor.session.frames.fps
         original_audio = [Clip(self.source, self.info.audio_stream, 0, 5 / fps)]
-        editor.audio = original_audio
+        editor.session.audio = original_audio
         self.addCleanup(strip.springs.reset)
         mime = QMimeData()
         mime.setData(QUEUED_MEDIA, next(key for key, job in window.jobs.items() if job.path == image).encode("ascii"))
@@ -433,7 +433,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertLess(spring.position, spring.target)
         self.app.sendEvent(strip.viewport(), QDragLeaveEvent())
         self.wait_for(lambda: not strip.springs.timer.isActive(), "时间轴空位收回")
-        self.assertIs(editor.video, original)
+        self.assertIs(editor.session.video, original)
 
         button = Qt.MouseButton.RightButton
         viewport = strip.viewport()
@@ -454,28 +454,28 @@ class EditorTimelineTest(WorkflowFixture):
             self.assertEqual(strip.drop_position, 4)
             self.assertEqual(strip.drop_frames, 4)
             self.assertFalse(editor.frame_context_menu.isVisible())
-            self.assertIs(editor.video, original)
+            self.assertIs(editor.session.video, original)
 
         drag_right()
         QTest.keyClick(strip, Qt.Key.Key_Escape)
         QTest.mouseRelease(viewport, button, pos=end)
         self.assertFalse(editor.frame_context_menu.isVisible())
         self.assertEqual(editor.video_selection, selection)
-        self.assertIs(editor.video, original)
+        self.assertIs(editor.session.video, original)
         drag_right()
         QTest.mouseRelease(viewport, button, pos=end)
-        refs = [editor._frame_ref(frame)[1] for frame in range(1, 10)]
+        refs = [editor.session.frame_ref(frame)[1] for frame in range(1, 10)]
         self.assertEqual(refs, [0, 3, 6, 7, 1, 2, 4, 5, 8])
-        self.assertEqual(len(editor.history), 1)
+        self.assertEqual(len(editor.session.history), 1)
         self.assertEqual(editor.video_selection, ((5, 8),))
-        self.assertAlmostEqual(length(editor.audio), length(original) / fps)
-        silent = slice_track(editor.audio, 2 / fps, 4 / fps)
+        self.assertAlmostEqual(length(editor.session.audio), length(original) / fps)
+        silent = slice_track(editor.session.audio, 2 / fps, 4 / fps)
         self.assertTrue(silent and all(clip.path is None for clip in silent))
-        moved_audio = slice_track(editor.audio, 4 / fps, 6 / fps)
+        moved_audio = slice_track(editor.session.audio, 4 / fps, 6 / fps)
         self.assertAlmostEqual(moved_audio[0].start, 1 / fps)
         editor.undo()
-        self.assertIs(editor.video, original)
-        self.assertIs(editor.audio, original_audio)
+        self.assertIs(editor.session.video, original)
+        self.assertIs(editor.session.audio, original_audio)
 
     def test_external_timeline_preview_keeps_one_tile_and_tracks_visible_boundaries(self):
         short = self.root / "1.jpg"
@@ -490,13 +490,13 @@ class EditorTimelineTest(WorkflowFixture):
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
         window.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "时间轴就绪")
         strip = editor.filmstrip
         viewport = strip.viewport()
         editor._set_video_range(3, 8)
         editor._update_range_marker()
-        track, selection = editor.video, editor.video_selection
+        track, selection = editor.session.video, editor.video_selection
         keys = {job.path: key for key, job in window.jobs.items()}
         widths = []
 
@@ -513,7 +513,7 @@ class EditorTimelineTest(WorkflowFixture):
             widths.append(strip.springs.states["width"].target)
             QTest.qWait(100)
             self.assertEqual(strip.drop_position, expected)
-            self.assertIs(editor.video, track)
+            self.assertIs(editor.session.video, track)
             self.assertEqual(editor.video_selection, selection)
             self.app.sendEvent(viewport, QDragLeaveEvent())
             self.assertTrue(strip.drop_badge.isHidden())
@@ -542,13 +542,13 @@ class EditorTimelineTest(WorkflowFixture):
         self.wait_for(lambda: all(job.picture for job in window.jobs.values()), "素材导入")
         window.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.frames and editor.scope is None and not window.page_transition.running,
+        self.wait_for(lambda: editor.session.frames and editor.scope is None and not window.page_transition.running,
                       "时间轴就绪")
         strip = editor.filmstrip
         viewport = strip.viewport()
         bar = strip.horizontalScrollBar()
         bar.setValue(16)
-        original = editor.video
+        original = editor.session.video
         point = QPoint(strip._tile_rect(3).left() + 8, 20)
         mime = QMimeData()
         mime.setData(QUEUED_MEDIA, next(key for key, job in window.jobs.items() if job.path == image).encode("ascii"))
@@ -578,14 +578,14 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertEqual(bar.value(), 16)
         wheel(-20)
         self.assertEqual((bar.value(), strip.drop_position), (17, 20))
-        self.assertIs(editor.video, original)
+        self.assertIs(editor.session.video, original)
         drop = QDropEvent(QPointF(point), action, mime, button, modifier)
         self.app.sendEvent(viewport, drop)
         self.assertTrue(drop.isAccepted())
-        self.wait_for(lambda: editor.scope is None and image in editor.imported_images, "图片插入")
-        self.assertEqual(editor._frame_ref(21)[0], editor.imported_images[image])
+        self.wait_for(lambda: editor.scope is None and image in editor.session.imported_images, "图片插入")
+        self.assertEqual(editor.session.frame_ref(21)[0], editor.session.imported_images[image])
         editor.undo()
-        self.assertIs(editor.video, original)
+        self.assertIs(editor.session.video, original)
 
         def drag_at(x):
             self.app.sendEvent(viewport, QDragMoveEvent(QPointF(x, 20), action, mime, button, modifier))
@@ -602,7 +602,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.wait_for(lambda: bar.value() < offset, "进入左边缘后自动向左滚动")
         self.app.sendEvent(viewport, QDragLeaveEvent())
         self.assertTrue(strip.drop_badge.isHidden())
-        self.assertIs(editor.video, original)
+        self.assertIs(editor.session.video, original)
 
     def test_video_audio_overflow_mark_can_select_move_and_delete(self):
         audio = self.root / "额外音频.wav"
@@ -613,12 +613,12 @@ class EditorTimelineTest(WorkflowFixture):
                         lookup_media=lambda key: (audio, audio_info, None) if key == "sound" else None)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.frames and editor.scope is None, "读取视频")
+        self.wait_for(lambda: editor.session.frames and editor.scope is None, "读取视频")
         editor.tabs.setCurrentWidget(editor.audio_page)
         view = editor.audio_view
         self.wait_for(lambda: editor.scope is None and view.waveform, "原音轨")
-        original_video = editor.video
-        video_end = editor._video_duration()
+        original_video = editor.session.video
+        video_end = editor.session.video_duration()
         editor._drop_audio("sound", .25)
         self.wait_for(lambda: editor.scope is None and view.waveform, "显示超出部分波形")
         total = video_end + audio_info.duration
@@ -651,12 +651,12 @@ class EditorTimelineTest(WorkflowFixture):
             action.trigger()
 
         delete_mark()
-        self.assertIs(editor.video, original_video)
-        self.assertAlmostEqual(length(editor._audio_track()), video_end)
+        self.assertIs(editor.session.video, original_video)
+        self.assertAlmostEqual(length(editor.session.audio_track()), video_end)
         self.assertIsNone(view.overflow)
         editor.undo()
         self.wait_for(lambda: editor.scope is None and view.waveform, "撤销后恢复超出范围")
-        before = editor.audio
+        before = editor.session.audio
         drag(Qt.MouseButton.LeftButton, video_end + .2, video_end + .55)
         start, end = view.trim_mark
         selected = end - start
@@ -667,15 +667,15 @@ class EditorTimelineTest(WorkflowFixture):
         moved_start, moved_end = view.trim_mark
         self.assertLess(moved_end, video_end)
         self.assertAlmostEqual(moved_end - moved_start, selected)
-        self.assertIs(editor.audio, before)
+        self.assertIs(editor.session.audio, before)
         projected_start, projected_end = view._overflow_after_mark()
         self.assertAlmostEqual(projected_start, video_end)
         self.assertAlmostEqual(projected_end - projected_start, .9 - selected)
         self.assertIn(f"删除标红后还差 {.9 - selected:.3f} 秒", editor.overflow_label.text())
         self.assertFalse(editor.audio_context_menu.isVisible())
         delete_mark()
-        self.assertAlmostEqual(length(editor._audio_track()), total - selected)
-        self.assertIs(editor.video, original_video)
+        self.assertAlmostEqual(length(editor.session.audio_track()), total - selected)
+        self.assertIs(editor.session.video, original_video)
         self.assertAlmostEqual(view.trim_mark[1] - view.trim_mark[0], .9 - selected)
 
     def test_waveform_cache_and_missing_audio_recovery(self):
