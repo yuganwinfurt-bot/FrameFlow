@@ -6,11 +6,11 @@ from PySide6.QtWidgets import (
 )
 
 from .agent_api import ModelClient, ModelConfig, accepted_probe, probe_model
-from .agent_ui import text_label
 from .icons import icon
 from .model_providers import CUSTOM, DEFAULT_TIMEOUT, MAX_TIMEOUT, MIN_TIMEOUT, PROVIDERS
 from .motion import Button, Combo, SpinBox
 from .theme import C
+from .widgets import label as text_label
 
 
 class ModelDialog(QDialog):

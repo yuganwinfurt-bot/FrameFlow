@@ -1804,7 +1804,7 @@ class WorkflowTest(unittest.TestCase):
         item = window.preview_items[keys[image]]
         start = left.visualItemRect(item).center()
         move = QPoint(left.viewport().width() + 12, start.y())
-        with patch("frameflow.window.QDrag") as drag:
+        with patch("frameflow.queue_view.QDrag") as drag:
             def execute(_action):
                 self.assertIs(window.pages.currentWidget(), editor)
                 mime = drag.return_value.setMimeData.call_args.args[0]

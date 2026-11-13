@@ -7,35 +7,38 @@ import tempfile
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from math import ceil, floor, log10
+from math import ceil, floor
 from pathlib import Path
 from stat import S_ISREG
 from time import monotonic
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCursor, QColor, QIntValidator, QKeySequence, QPainter, QPen, QPixmap, QPolygonF, QShortcut
+from PySide6.QtCore import QEvent, QObject, QPoint, QSignalBlocker, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QCursor, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QBoxLayout, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit,
-                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter,
-                               QStyle, QStyleOptionSlider, QTabBar, QTabWidget, QVBoxLayout, QWidget,
+                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
+                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+                               QTabBar, QTabWidget, QVBoxLayout, QWidget,
                                QWidgetAction)
 
 from .editing import (Clip, Frames, VideoSource, audio_preview, audio_segment, frame_png, index_frames, length,
                       original_audio, render_edit, render_preview_wav, save_picture, slice_track, splice)
 from .details import DetailsView
-from .filmstrip import EDIT_KEYS, Filmstrip
+from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabel, RunStatus,
+                             SeekSlider, TransportButton, VideoPreview, VolumePopup)
+from .filmstrip import Filmstrip
 from . import icons
 from .media import audio_encoder_args, output_extension
-from .media import (AUDIO_EXTENSIONS, HARDWARE_BACKENDS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
+from .media import (AUDIO_EXTENSIONS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
                     AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
                     hardware_acceleration_choices)
 from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _save_image, estimate_image_size,
                     media_path_missing, probe, thumbnail)
-from .motion import (Button, Combo, DirectoryButton, DirectoryPathEdit, Motion, QualityRow, SpinBox, WheelSlider,
-                     hide_vertical_scroll_bar, queued_media_key)
+from .motion import (Button, Combo, DirectoryPathEdit, Motion, QualityRow, SpinBox, WheelSlider,
+                     hide_vertical_scroll_bar)
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
+from .wave_view import WaveView
 
 
 _IMAGE_ENCODERS = {"png", "jpg", "jpeg", "webp", "avif", "tiff", "bmp", "gif_image", "ico", "pdf"}
@@ -90,23 +93,6 @@ def _text_button(title, callback):
     return button
 
 
-class TransportButton(QPushButton):
-    """播放器控制按钮，使用单独的深色外观和清晰的无障碍名称。"""
-
-    def __init__(self, icon_name: str, title: str, callback, *, primary: bool = False):
-        super().__init__()
-        self.setIcon(icons.icon(icon_name, 18, "#FFFFFF", 2))
-        self.setIconSize(QSize(18, 18))
-        self.setAutoDefault(False)
-        self.setProperty("transport", True)
-        self.setProperty("transportPrimary", primary)
-        self.setAccessibleName(title)
-        self.setToolTip(title)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(36, 32)
-        self.clicked.connect(callback)
-
-
 class FullscreenPlayer(QDialog):
     def __init__(self, editor):
         super().__init__(editor, Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
@@ -137,60 +123,6 @@ class FullscreenPlayer(QDialog):
         self.editor.restore_player()
         super().done(result)
         self.deleteLater()
-
-
-class SeekSlider(QSlider):
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            option = QStyleOptionSlider()
-            self.initStyleOption(option)
-            control = QStyle.ComplexControl.CC_Slider
-            handle = self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderHandle, self)
-            if not handle.contains(event.position().toPoint()):
-                groove = self.style().subControlRect(control, option, QStyle.SubControl.SC_SliderGroove, self)
-                self.setValue(QStyle.sliderValueFromPosition(
-                    self.minimum(), self.maximum(),
-                    round(event.position().x()) - groove.left() - handle.width() // 2,
-                    max(1, groove.width() - handle.width()), option.upsideDown))
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-
-class FrameNumberEdit(QLineEdit):
-    """直接输入帧号，回车或离开输入框时确认。"""
-
-    valueChanged = Signal(int)
-
-    def __init__(self):
-        super().__init__("1")
-        self.setObjectName("frameField")
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setValidator(QIntValidator(1, 2_147_483_647, self))
-        self._minimum = self._maximum = self._value = 1
-        self.returnPressed.connect(self._commit)
-
-    def setRange(self, minimum, maximum):
-        self._minimum, self._maximum = minimum, maximum
-        self.setValue(self._value)
-
-    def value(self):
-        return self._value
-
-    def setValue(self, value):
-        value = min(self._maximum, max(self._minimum, value))
-        self.setText(str(value))
-        if value != self._value:
-            self._value = value
-            self.valueChanged.emit(value)
-
-    def _commit(self):
-        text = self.text()
-        self.setValue(int(text) if text.isdecimal() else self._value)
-
-    def focusOutEvent(self, event):
-        self._commit()
-        super().focusOutEvent(event)
 
 
 def _combo():
@@ -301,778 +233,6 @@ class EditorEvents(QObject):
     notice = Signal(str)
     frame_ready = Signal(object, object, str)
     picture_estimate = Signal(int, int, str)
-
-
-class PreviewLabel(QLabel):
-    def __init__(self):
-        super().__init__()
-        self.original = None
-
-    def setText(self, text):
-        self.original = None
-        super().setText(text)
-
-    def set_image(self, data):
-        picture = QPixmap()
-        if data and picture.loadFromData(data):
-            self.set_picture(picture)
-        else:
-            self.setText("暂无预览")
-
-    def set_picture(self, picture):
-        self.original = picture
-        self._fit()
-
-    def _fit(self):
-        if self.original is not None:
-            self.setPixmap(self.original.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
-                                                Qt.TransformationMode.SmoothTransformation))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._fit()
-
-    def sizeHint(self):
-        return QSize(480, 300)
-
-    def minimumSizeHint(self):
-        return QSize(0, 120)
-
-
-class InfoChip(QLabel):
-    """媒体信息里的一格字：按内容排版，但最小宽度为 0，窄窗口时可以被压缩。"""
-
-    def minimumSizeHint(self):
-        hint = super().minimumSizeHint()
-        return QSize(0, hint.height())
-
-
-class RunStatus(QPlainTextEdit):
-    setText = QPlainTextEdit.setPlainText
-    text = QPlainTextEdit.toPlainText
-
-    def __init__(self):
-        super().__init__()
-        self.setObjectName("runStatus")
-        self.setAccessibleName("运行信息")
-        self.setReadOnly(True)
-        self.setTabChangesFocus(True)
-        self.setPlaceholderText("等待操作")
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        hide_vertical_scroll_bar(self)
-        self.setMinimumHeight(42)
-
-    def sizeHint(self):
-        return QSize(0, 56)
-
-
-class PictureView(PreviewLabel):
-    """图片查看器：滚轮以光标为中心缩放、放大后可拖动、双击复位。"""
-
-    MIN_SCALE = 0.25
-    MAX_SCALE = 6.0
-
-    def __init__(self):
-        super().__init__()
-        self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self._scale = 1.0          # 相对“适应窗口”的倍率
-        self._offset = QPointF(0, 0)
-        self._drag_from = None
-        self._drag_start = None
-
-    # 基础：适应窗口时的缩放比
-    def _fit_scale(self) -> float:
-        if self.original is None or self.original.isNull():
-            return 1.0
-        area = self.size()
-        if area.width() <= 0 or area.height() <= 0:
-            return 1.0
-        return min(area.width() / self.original.width(), area.height() / self.original.height())
-
-    def _paint(self) -> None:
-        if self.original is None or self.original.isNull():
-            return
-        base = self._fit_scale()
-        scale = max(self.MIN_SCALE, min(self.MAX_SCALE, base * self._scale))
-        width = max(1, round(self.original.width() * scale))
-        height = max(1, round(self.original.height() * scale))
-        canvas = QPixmap(self.size())
-        canvas.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(canvas)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        x = (self.width() - width) / 2 + self._offset.x()
-        y = (self.height() - height) / 2 + self._offset.y()
-        painter.drawPixmap(QRectF(x, y, width, height), self.original,
-                           QRectF(self.original.rect()))
-        painter.end()
-        self.setPixmap(canvas)
-
-    def _clamp_offset(self) -> None:
-        base = self._fit_scale()
-        scale = max(self.MIN_SCALE, min(self.MAX_SCALE, base * self._scale))
-        width = self.original.width() * scale if self.original else 0
-        height = self.original.height() * scale if self.original else 0
-        limit_x = max(0.0, (width - self.width()) / 2)
-        limit_y = max(0.0, (height - self.height()) / 2)
-        self._offset = QPointF(max(-limit_x, min(limit_x, self._offset.x())),
-                               max(-limit_y, min(limit_y, self._offset.y())))
-
-    def set_picture(self, picture):
-        self.original = picture
-        self._scale = 1.0
-        self._offset = QPointF(0, 0)
-        self._paint()
-
-    def _fit(self):
-        self._paint()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._paint()
-
-    def wheelEvent(self, event):
-        if self.original is None or self.original.isNull():
-            return super().wheelEvent(event)
-        delta = event.angleDelta().y() or event.pixelDelta().y()
-        if not delta:
-            return
-        factor = 1.1 ** (delta / 120.0)
-        before = self._scale
-        after = max(self.MIN_SCALE, min(self.MAX_SCALE, before * factor))
-        if after == before:
-            event.accept()
-            return
-        # 以光标位置为缩放中心：算出光标相对中心的世界坐标，按比例缩放后回推偏移
-        centre = QPointF(self.width() / 2, self.height() / 2)
-        cursor = event.position()
-        anchor = (cursor - centre - self._offset) / before
-        self._scale = after
-        self._offset = cursor - centre - anchor * after
-        self._clamp_offset()
-        self._paint()
-        event.accept()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and self._scale > 1.0:
-            self._drag_from = event.position()
-            self._drag_start = QPointF(self._offset)
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._drag_from is not None:
-            self._offset = self._drag_start + (event.position() - self._drag_from)
-            self._clamp_offset()
-            self._paint()
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self._drag_from is not None:
-            self._drag_from = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        self._scale = 1.0
-        self._offset = QPointF(0, 0)
-        self._paint()
-        event.accept()
-
-
-class VideoPreview(PreviewLabel):
-    def __init__(self):
-        super().__init__()
-        self.zoom = 1.0
-        self.offset = QPointF()
-        self.drag_position = None
-        self.setToolTip("滚轮缩放 · 放大后拖动画面 · 双击复位")
-
-    def set_picture(self, picture):
-        if self.original is None:
-            self.setText("")
-        super().set_picture(picture)
-
-    def _image_rect(self):
-        view = QRectF(self.contentsRect())
-        width, height = self.original.width(), self.original.height()
-        scale = min(view.width() / width, view.height() / height) * self.zoom
-        image = QRectF(0, 0, width * scale, height * scale)
-        image.moveCenter(view.center() + self.offset)
-        return image
-
-    def _fit(self):
-        if self.original is None:
-            return
-        view = self.contentsRect()
-        image = self._image_rect()
-        limit_x = max(0.0, (image.width() - view.width()) / 2)
-        limit_y = max(0.0, (image.height() - view.height()) / 2)
-        self.offset = QPointF(min(limit_x, max(-limit_x, self.offset.x())),
-                              min(limit_y, max(-limit_y, self.offset.y())))
-        self.update()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if self.original is not None:
-            painter = QPainter(self)
-            painter.setClipRect(self.contentsRect())
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.drawPixmap(self._image_rect(), self.original, QRectF(self.original.rect()))
-
-    def wheelEvent(self, event):
-        delta = event.angleDelta().y() or event.pixelDelta().y()
-        if self.original is None or not delta:
-            return super().wheelEvent(event)
-        steps = min(3.0, max(-3.0, delta / 120))
-        zoom = min(8.0, max(.25, self.zoom * 1.25 ** steps))
-        center = QRectF(self.contentsRect()).center()
-        anchor = event.position() if self._image_rect().contains(event.position()) else center
-        self.offset = anchor - center + (center + self.offset - anchor) * (zoom / self.zoom)
-        self.zoom = zoom
-        self._fit()
-        event.accept()
-
-    def mousePressEvent(self, event):
-        if self.zoom > 1 and self.original is not None and event.button() == Qt.MouseButton.LeftButton:
-            self.drag_position = event.position()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.drag_position is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.offset += event.position() - self.drag_position
-            self.drag_position = event.position()
-            self._fit()
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self.drag_position is not None and event.button() == Qt.MouseButton.LeftButton:
-            self.drag_position = None
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.zoom = 1.0
-            self.offset = QPointF()
-            self.drag_position = None
-            self._fit()
-            event.accept()
-        else:
-            super().mouseDoubleClickEvent(event)
-
-
-class WaveView(PreviewLabel):
-    range_selected = Signal(float, float)
-    seek = Signal(float)
-    view_changed = Signal()
-    context_requested = Signal(float, object)
-    edit_command = Signal(str)
-    media_dropped = Signal(str, float)
-    trim_changed = Signal()
-    window_requested = Signal(float, float)
-
-    def __init__(self, can_drop_media):
-        super().__init__()
-        self.can_drop_media = can_drop_media
-        self.waveform = None
-        self.envelope_key = None
-        self.bands = []
-        self.loaded_interval = None
-        self.interval = None
-        self.playhead = 0.0
-        self.insertion = None
-        self.empty_duration = 0.0
-        self.drop_active = False
-        self.selection = None
-        self.anchor = self.cursor = None
-        self.overflow = None
-        self.trim_mark = None
-        self.mark_gesture = None
-        self.mark_dragged = False
-        self.setCursor(Qt.CursorShape.CrossCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setAcceptDrops(True)
-
-    def _timeline_interval(self):
-        return self.interval or ((0.0, self.empty_duration) if self.empty_duration else None)
-
-    def set_waveform(self, waveform, interval):
-        self.waveform = waveform
-        self.envelope_key = None
-        self.bands = []
-        self.loaded_interval = self.interval = interval if waveform else None
-        self.anchor = self.cursor = None
-        self.mark_gesture = None
-        self.mark_dragged = False
-        self.setText("" if waveform else "暂无可显示的音频")
-        self.update()
-        self.view_changed.emit()
-
-    def show_interval(self, start, end):
-        first, last = self.loaded_interval
-        span = min(last - first, max(end - start, self.minimum_span()))
-        start = min(max(start, first), last - span)
-        self.interval = start, start + span
-        self.update()
-        self.view_changed.emit()
-
-    def minimum_span(self):
-        return max(12, self._bounds().width() / 8) / self.waveform.sample_rate
-
-    def sample_spacing(self):
-        if not self.interval:
-            return 0
-        start, end = self.interval
-        return self._bounds().width() / ((end - start) * self.waveform.sample_rate)
-
-    def zoom_to_samples(self, position):
-        if self.waveform:
-            half_span = max(24, self._bounds().width() / 4) / (2 * self.waveform.sample_rate)
-            self.show_interval(position - half_span, position + half_span)
-
-    def zoom(self, factor, fraction=.5):
-        if self.interval:
-            start, end = self.interval
-            span = end - start
-            first, last = self.loaded_interval
-            width = min(last - first, max(span / factor, self.minimum_span()))
-            left = start + (span - width) * fraction
-            self.show_interval(left, left + width)
-
-    def reset_zoom(self):
-        if self.loaded_interval:
-            self.show_interval(*self.loaded_interval)
-
-    def reveal(self, position):
-        if self.interval and self.loaded_interval[0] <= position <= self.loaded_interval[1]:
-            start, end = self.interval
-            if not start <= position <= end:
-                self.show_interval(position - (end - start) * .15, position + (end - start) * .85)
-
-    def wheelEvent(self, event):
-        delta = event.angleDelta().y() or event.angleDelta().x()
-        if not self.interval or not delta:
-            super().wheelEvent(event)
-            return
-        steps = min(8, max(-8, delta / 120))
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self.zoom(1.4 ** steps, self._fraction(event.position()))
-        else:
-            start, end = self.interval
-            offset = -(end - start) * steps / 5
-            loaded_start, loaded_end = self.loaded_interval
-            if self.overflow and (
-                (offset < 0 and start <= loaded_start + 1e-6 and loaded_start > 0)
-                or (offset > 0 and end >= loaded_end - 1e-6 and loaded_end < self.overflow[1] - 1e-6)
-            ):
-                self.window_requested.emit(max(0, start + offset), max(end - start, end + offset))
-            else:
-                self.show_interval(start + offset, end + offset)
-        event.accept()
-
-    def _bounds(self):
-        return QRectF(self.rect()).adjusted(46, 33, -14, -15)
-
-    def _fraction(self, position):
-        bounds = self._bounds()
-        return min(1, max(0, (position.x() - bounds.x()) / max(1, bounds.width())))
-
-    def _time_at(self, position):
-        if interval := self._timeline_interval():
-            start, end = interval
-            return start + (end - start) * self._fraction(position)
-        return self.playhead
-
-    def set_overflow(self, overflow):
-        if overflow != self.overflow:
-            self.overflow = overflow
-            self.mark_gesture = None
-            self.mark_dragged = False
-            self.set_trim_mark(overflow)
-
-    def set_trim_mark(self, region):
-        self.trim_mark = region
-        self.update()
-        self.trim_changed.emit()
-
-    def marked_at(self, position):
-        return self.trim_mark is not None and self.trim_mark[0] <= position <= self.trim_mark[1]
-
-    def move_trim_mark(self, start):
-        if self.trim_mark and self.overflow:
-            duration = self.trim_mark[1] - self.trim_mark[0]
-            start = max(0.0, min(start, self.overflow[1] - duration))
-            self.set_trim_mark((start, start + duration))
-
-    def _overflow_after_mark(self):
-        if self.overflow:
-            start, end = self.overflow
-            if self.trim_mark:
-                first, last = self.trim_mark
-                end -= max(0.0, min(start, last) - first)
-            return start, max(start, end)
-        return None
-
-    def _update_mark_gesture(self, position):
-        button, origin_x, anchor, original = self.mark_gesture
-        if not self.mark_dragged and abs(position.x() - origin_x) < 3:
-            return
-        self.mark_dragged = True
-        current = self._time_at(position)
-        start, end = original
-        if button == Qt.MouseButton.RightButton:
-            duration = end - start
-            left = max(0.0, min(start + current - anchor, self.overflow[1] - duration))
-            self.set_trim_mark((left, left + duration))
-        else:
-            left, right = sorted((anchor, max(start, min(end, current))))
-            if right - left > .0005:
-                self.set_trim_mark((left, right))
-
-    def mousePressEvent(self, event):
-        button = event.button()
-        time = self._time_at(event.position())
-        if (self._timeline_interval() and button in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton)
-                and self.marked_at(time)):
-            self.setFocus()
-            self.anchor = self.cursor = None
-            self.mark_gesture = button, event.position().x(), time, self.trim_mark
-            self.mark_dragged = False
-            event.accept()
-        elif button == Qt.MouseButton.LeftButton:
-            self.setFocus()
-            if self._timeline_interval():
-                self.anchor = self.cursor = self._fraction(event.position())
-                self.update()
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.mark_gesture is not None and event.buttons() & self.mark_gesture[0]:
-            self._update_mark_gesture(event.position())
-            event.accept()
-        elif self.anchor is not None:
-            self.cursor = self._fraction(event.position())
-            self.update()
-
-    def mouseReleaseEvent(self, event):
-        button = event.button()
-        position = self._time_at(event.position())
-        if self.mark_gesture is not None and button == self.mark_gesture[0]:
-            self._update_mark_gesture(event.position())
-            moved = self.mark_dragged
-            self.mark_gesture = None
-            self.mark_dragged = False
-            if not moved:
-                if button == Qt.MouseButton.RightButton:
-                    self.context_requested.emit(position, event.globalPosition().toPoint())
-                else:
-                    self.seek.emit(position)
-            event.accept()
-        elif button == Qt.MouseButton.RightButton:
-            self.setFocus()
-            self.context_requested.emit(position, event.globalPosition().toPoint())
-            event.accept()
-        elif button == Qt.MouseButton.LeftButton and self.anchor is not None and self._timeline_interval():
-            start, end = self._timeline_interval()
-            left, right = sorted((self.anchor, self._fraction(event.position())))
-            self.anchor, self.cursor = None, None
-            if (right - left) * self._bounds().width() >= 3:
-                self.range_selected.emit(start + (end - start) * left, start + (end - start) * right)
-            else:
-                self.seek.emit(start + (end - start) * left)
-            self.update()
-        else:
-            super().mouseReleaseEvent(event)
-
-    def dragEnterEvent(self, event):
-        self.dragMoveEvent(event)
-
-    def dragMoveEvent(self, event):
-        self.drop_active = self.insertion is not None and self.can_drop_media(queued_media_key(event.mimeData()))
-        self.update()
-        if self.drop_active:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event):
-        self.drop_active = False
-        self.update()
-        event.accept()
-
-    def dropEvent(self, event):
-        self.drop_active = False
-        self.update()
-        key = queued_media_key(event.mimeData())
-        if self.insertion is not None and self.can_drop_media(key):
-            self.media_dropped.emit(key, self.insertion)
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def keyPressEvent(self, event):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            if command := EDIT_KEYS.get(event.key()):
-                self.edit_command.emit(command)
-                event.accept()
-                return
-        super().keyPressEvent(event)
-
-    def _selection_fraction(self):
-        if self.anchor is not None and self.cursor is not None:
-            return sorted((self.anchor, self.cursor))
-        if self.selection:
-            start, end = self.interval
-            return [min(1, max(0, (second - start) / (end - start))) for second in self.selection]
-        return 0, 0
-
-    @staticmethod
-    def _time_label(second, decimals):
-        units = 10 ** decimals
-        minutes, remainder = divmod(round(second * units), 60 * units)
-        width = decimals + 3 if decimals else 2
-        return f"{minutes}:{remainder / units:0{width}.{decimals}f}"
-
-    def _draw_ruler(self, painter, bounds, interval):
-        start, end = interval
-        duration = end - start
-        ideal = duration / max(1, int(bounds.width() / 85))
-        unit = 10 ** floor(log10(ideal))
-        step = next(unit * factor for factor in (1, 2, 5, 10) if unit * factor >= ideal)
-        decimals = min(6, max(1, ceil(-log10(step))))
-        text_area = QRectF(bounds.left(), 7, bounds.width(), 20)
-        painter.setPen(QColor("#153c62"))
-        painter.drawText(text_area, Qt.AlignmentFlag.AlignLeft, self._time_label(start, decimals))
-        painter.drawText(text_area, Qt.AlignmentFlag.AlignRight, self._time_label(end, decimals))
-        for mark in range(floor(start / step) + 1, ceil(end / step)):
-            second = mark * step
-            x = bounds.left() + (second - start) * bounds.width() / duration
-            painter.setPen(QColor("#d1e0ef"))
-            painter.drawLine(QPointF(x, bounds.top() - 5), QPointF(x, bounds.bottom()))
-            if bounds.left() + 57 < x < bounds.right() - 57:
-                painter.setPen(QColor("#53677e"))
-                painter.drawText(QRectF(x - 35, 7, 70, 20), Qt.AlignmentFlag.AlignCenter,
-                                 self._time_label(second, decimals))
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        interval = self._timeline_interval()
-        if not interval:
-            return
-        bounds = self._bounds()
-        painter = QPainter(self)
-        painter.fillRect(bounds, QColor("#f8fafd"))
-        painter.fillRect(QRectF(5, bounds.top(), bounds.left() - 5, bounds.height()), QColor("#eff3f8"))
-        if self.waveform is None:
-            self._draw_ruler(painter, bounds, interval)
-            painter.setPen(QColor("#53677e"))
-            painter.drawText(bounds, Qt.AlignmentFlag.AlignCenter, "暂无音轨 · 单击定位后可拖入音频")
-            self._draw_playheads(painter, bounds, interval)
-            painter.end()
-            return
-        left, right = self._selection_fraction()
-        selected = QRectF(bounds.left() + left * bounds.width(), bounds.top(),
-                          (right - left) * bounds.width(), bounds.height())
-        if selected.width() > 0:
-            painter.fillRect(selected, QColor("#e0edfd"))
-        overflow = self._span_rect(bounds, interval, self._overflow_after_mark())
-        marked = self._span_rect(bounds, interval, self.trim_mark)
-        if not overflow.isEmpty():
-            painter.fillRect(overflow, QColor("#ffe8ea"))
-        if not marked.isEmpty():
-            painter.fillRect(marked, QColor("#ffcfd4"))
-        self._draw_ruler(painter, bounds, interval)
-        start, end = self.interval
-        waveform = self.waveform
-        base_start = self.loaded_interval[0]
-        spacing = self.sample_spacing()
-        samples_visible = spacing >= 1.0
-        if not samples_visible:
-            columns = max(1, round(bounds.width() * self.devicePixelRatioF()))
-            if (self.interval, columns) != self.envelope_key:
-                self.bands = waveform.envelope(start - base_start, end - base_start, columns)
-                self.envelope_key = self.interval, columns
-        lane_count = len(waveform.samples)
-        lane_height = bounds.height() / lane_count
-        for index, samples in enumerate(waveform.samples):
-            middle = bounds.top() + (index + .5) * lane_height
-            gain = lane_height * .41
-            name = "波形" if lane_count == 1 else ("左声道" if index == 0 else "右声道")
-            painter.setPen(QColor("#62758c"))
-            painter.drawText(QRectF(5, middle - lane_height / 2, bounds.left() - 7, 19),
-                             Qt.AlignmentFlag.AlignCenter, name)
-            for level, label in ((.5, "+0.5"), (0, "0"), (-.5, "−0.5")):
-                y = middle - gain * level
-                painter.setPen(QColor("#a6b6c8" if not level else "#e4ebf4"))
-                painter.drawLine(QPointF(bounds.left(), y), QPointF(bounds.right(), y))
-                painter.setPen(QColor("#687d95"))
-                painter.drawText(QRectF(5, y - 9, bounds.left() - 12, 18),
-                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, label)
-            painter.save()
-            painter.setClipRect(QRectF(bounds.left(), middle - lane_height / 2, bounds.width(), lane_height))
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor("#376f9f"), 1))
-            if samples_visible:
-                first = max(0, floor((start - base_start) * waveform.sample_rate))
-                last = min(len(samples), ceil((end - base_start) * waveform.sample_rate) + 1)
-                left = bounds.left() + (base_start - start) * waveform.sample_rate * spacing
-                points = [QPointF(left + i * spacing, middle - samples[i] / waveform.reference * gain)
-                          for i in range(first, last)]
-                painter.drawPolyline(QPolygonF(points))
-                if spacing >= 3:
-                    painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(QColor("#376f9f"))
-                    for point in points:
-                        painter.drawEllipse(point, 1.35, 1.35)
-            else:
-                band = self.bands[index]
-                step = bounds.width() / max(1, len(band) - 1)
-                upper = [QPointF(bounds.left() + i * step, middle - high * gain)
-                         for i, (_, high) in enumerate(band)]
-                lower = [QPointF(bounds.left() + i * step, middle - low * gain)
-                         for i, (low, _) in enumerate(band)]
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor("#c7def2"))
-                painter.drawPolygon(QPolygonF(upper + lower[::-1]))
-                painter.setPen(QPen(QColor("#4e81ae"), .8))
-                painter.drawPolyline(QPolygonF(upper))
-                painter.drawPolyline(QPolygonF(lower))
-            painter.restore()
-        if selected.width() > 0:
-            painter.setPen(QColor("#4687d5"))
-            painter.drawLine(selected.topLeft(), selected.bottomLeft())
-            painter.drawLine(selected.topRight(), selected.bottomRight())
-        if not marked.isEmpty():
-            painter.setPen(QPen(QColor("#cc444e"), 1))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(marked)
-        if self.overflow and interval[0] <= self.overflow[0] <= interval[1]:
-            x = bounds.left() + (self.overflow[0] - interval[0]) * bounds.width() / (interval[1] - interval[0])
-            painter.setPen(QPen(QColor("#c03642"), 1, Qt.PenStyle.DashLine))
-            painter.drawLine(QPointF(x, bounds.top() - 6), QPointF(x, bounds.bottom()))
-            if bounds.right() - x >= 58:
-                painter.drawText(QRectF(x + 5, bounds.top() + 4, 54, 19),
-                                 Qt.AlignmentFlag.AlignCenter, "视频结尾")
-        self._draw_playheads(painter, bounds, interval)
-        painter.end()
-
-    @staticmethod
-    def _span_rect(bounds, interval, span):
-        if span:
-            start, end = interval
-            left, right = max(start, span[0]), min(end, span[1])
-            if right > left:
-                scale = bounds.width() / (end - start)
-                return QRectF(bounds.left() + (left - start) * scale, bounds.top(),
-                              (right - left) * scale, bounds.height())
-        return QRectF()
-
-    def _draw_playheads(self, painter, bounds, interval):
-        start, end = interval
-        for position, color, width in ((self.playhead, "#194f98", 1),
-                                       (self.insertion, "#17202b", 3 if self.drop_active else 2)):
-            if position is not None and start <= position <= end:
-                x = bounds.left() + (position - start) * bounds.width() / (end - start)
-                painter.setPen(QPen(QColor(color), width))
-                painter.drawLine(QPointF(x, bounds.top() - 6), QPointF(x, bounds.bottom()))
-
-
-class VolumeSlider(WheelSlider):
-    """竖直音量滑轨：从底部按数值向上填充，避免 QSS 在垂直方向上的反向问题。"""
-
-    TRACK_WIDTH = 4
-    HANDLE = 12
-
-    def __init__(self, orientation=Qt.Orientation.Vertical):
-        super().__init__(orientation, wheel_step=5)
-        self.setRange(0, 100)
-        self.setFixedWidth(24)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def _track(self) -> QRectF:
-        top = self.HANDLE / 2
-        bottom = self.height() - self.HANDLE / 2
-        return QRectF((self.width() - self.TRACK_WIDTH) / 2, top,
-                      self.TRACK_WIDTH, max(1.0, bottom - top))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-        track = self._track()
-        radius = self.TRACK_WIDTH / 2
-        painter.setBrush(QColor("#DEE7F5"))
-        painter.drawRoundedRect(track, radius, radius)
-        ratio = (self.value() - self.minimum()) / max(1, self.maximum() - self.minimum())
-        filled = track.height() * ratio
-        if filled > 0:
-            fill = QRectF(track.left(), track.bottom() - filled, track.width(), filled)
-            painter.setBrush(QColor("#1677FF"))
-            painter.drawRoundedRect(fill, radius, radius)
-        handle_y = track.bottom() - filled
-        painter.setBrush(QColor("#FFFFFF"))
-        pen = QPen(QColor("#1677FF"))
-        pen.setWidthF(2.0)
-        painter.setPen(pen)
-        painter.drawEllipse(QPointF(track.center().x(), handle_y),
-                            self.HANDLE / 2, self.HANDLE / 2)
-        painter.end()
-
-
-class VolumePopup(QFrame):
-    """B 站式音量浮层：竖直滑轨 + 百分比，点击轨道即定位。"""
-
-    changed = Signal(int)
-
-    def __init__(self, parent):
-        super().__init__(parent, Qt.WindowType.ToolTip)
-        self.setObjectName("volumePopup")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedSize(64, 190)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 8, 6, 8)
-        layout.setSpacing(4)
-        self.slider = VolumeSlider(Qt.Orientation.Vertical)
-        self.slider.setObjectName("volumeSlider")
-        self.slider.setAccessibleName("播放音量")
-        layout.addWidget(self.slider, 1, Qt.AlignmentFlag.AlignHCenter)
-        self.label = QLabel("100%")
-        self.label.setObjectName("volumePercent")
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.label)
-        self.slider.valueChanged.connect(self._on_value)
-        from PySide6.QtWidgets import QGraphicsDropShadowEffect
-        from PySide6.QtGui import QColor
-        glow = QGraphicsDropShadowEffect(self)
-        glow.setBlurRadius(26)
-        glow.setOffset(0, 5)
-        glow.setColor(QColor(30, 60, 110, 44))
-        self.setGraphicsEffect(glow)
-
-    def _on_value(self, value: int) -> None:
-        self.label.setText(f"{value}%")
-        self.changed.emit(value)
-
-    def set_level(self, value: int) -> None:
-        if self.slider.value() != value:
-            self.slider.blockSignals(True)
-            self.slider.setValue(value)
-            self.slider.blockSignals(False)
-        self.label.setText(f"{value}%")
 
 
 class Editor(QDialog):
@@ -1217,177 +377,193 @@ class Editor(QDialog):
         self.preview_split.addWidget(self.tabs)
         self.video_page = self.audio_page = self.image_page = self.details_page = None
         if isinstance(self.info, VideoInfo):
-            self.video_page, layout = self._page("视频" if self.embedded else "视频帧", "video")
-            layout.setContentsMargins(0, 6, 0, 0)
-            self.video_layout = layout
-            self.cursor = _spin()
-            self.cursor.setSuffix(" 帧")
-            self.cursor.setFixedWidth(88)
-            self.cursor.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.cursor.valueChanged.connect(self._cursor_changed)
-
-            self.player = QFrame()
-            self.player.setObjectName("videoPlayer")
-            player_layout = QVBoxLayout(self.player)
-            player_layout.setContentsMargins(0, 0, 0, 0)
-            player_layout.setSpacing(0)
-            self.frame_view = self._preview_label(VideoPreview())
-            self.frame_view.setObjectName("videoCanvas")
-            self.frame_view.setMinimumHeight(150)
-            badges = QVBoxLayout(self.frame_view)
-            badges.setContentsMargins(10, 9, 10, 0)
-            player_header = QHBoxLayout()
-            player_header.setSpacing(5)
-            container = self.path.suffix.lstrip(".").upper() or "VIDEO"
-            player_header.addWidget(_text(container, name="playerBadge"))
-            player_header.addWidget(_text(self.info.codec, name="playerBadge"))
-            player_header.addWidget(_text(f"{self.info.width} × {self.info.height}", name="playerBadge"))
-            player_header.addWidget(_text(f"{self.info.fps:g} FPS", name="playerBadge"))
-            player_header.addStretch(1)
-            badges.addLayout(player_header)
-            badges.addStretch(1)
-            player_layout.addWidget(self.frame_view, 1)
-
-            controls = QFrame()
-            controls.setObjectName("playerControls")
-            self.player_controls = controls
-            controls_layout = QHBoxLayout(controls)
-            controls_layout.setContentsMargins(10, 7, 10, 8)
-            controls_layout.setSpacing(6)
-            self.previous_frame_button = TransportButton("previous", "上一帧", self._previous)
-            self.play_button = TransportButton("play", "播放", self._toggle_playback, primary=True)
-            self.play_button.setEnabled(False)
-            self.next_frame_button = TransportButton("next", "下一帧", self._next)
-            for widget in (self.previous_frame_button, self.play_button, self.next_frame_button):
-                widget.setEnabled(False)
-                controls_layout.addWidget(widget)
-            self.player_time_current = _text("00:00.000", name="playerTime")
-            self.player_time_current.setContentsMargins(5, 0, 0, 0)
-            controls_layout.addWidget(self.player_time_current)
-            self.player_time_short = _text("00:00", name="playerTime")
-            self.player_time_short.hide()
-            controls_layout.addWidget(self.player_time_short)
-            self.player_time_separator = _text("/", name="playerTime")
-            controls_layout.addWidget(self.player_time_separator)
-            self.player_time_total = _text("00:00.000", name="playerTime")
-            controls_layout.addWidget(self.player_time_total)
-            self.player_seek = SeekSlider(Qt.Orientation.Horizontal)
-            self.player_seek.setObjectName("playerSeek")
-            self.player_seek.setAccessibleName("视频播放位置")
-            self.player_seek.setRange(1, 1)
-            self.player_seek.setSingleStep(1)
-            self.player_seek.setPageStep(1)
-            self.player_seek.setMinimumWidth(42)
-            self.player_seek.setEnabled(False)
-            self.player_seek.valueChanged.connect(self._seek_from_player)
-            controls_layout.addWidget(self.player_seek, 1)
-            self.volume_button = TransportButton("volume", "静音 / 恢复音量", self._toggle_player_mute)
-            controls_layout.addWidget(self.volume_button)
-            self.volume_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.volume_button.customContextMenuRequested.connect(self._show_player_volume)
-            self.volume_button.installEventFilter(self)
-            self.volume_hide = QTimer(self)
-            self.volume_hide.setSingleShot(True)
-            self.volume_hide.setInterval(260)
-            self.volume_hide.timeout.connect(lambda: self.volume_menu.hide()
-                                             if self.volume_menu.isVisible() else None)
-            self.volume_menu = QMenu(self.volume_button)
-            volume_action = QWidgetAction(self.volume_menu)
-            volume_panel = QWidget()
-            volume_layout = QHBoxLayout(volume_panel)
-            volume_layout.addWidget(_text("音量"))
-            self.player_volume = WheelSlider(Qt.Orientation.Horizontal, wheel_step=5)
-            self.player_volume.setRange(0, 100)
-            self.player_volume.setValue(self.playback_level)
-            self.player_volume.setAccessibleName("播放音量")
-            self.player_volume.setFixedWidth(110)
-            self.player_volume.valueChanged.connect(self._set_player_volume)
-            volume_layout.addWidget(self.player_volume)
-            self.volume_value = _text("100%")
-            self.volume_value.setMinimumWidth(36)
-            volume_layout.addWidget(self.volume_value)
-            volume_action.setDefaultWidget(volume_panel)
-            self.volume_menu.addAction(volume_action)
-            self.volume_options = TransportButton("down", "调整播放音量", self._show_player_volume)
-            self.volume_options.setFixedSize(24, 32)
-            self.volume_options.hide()
-            self.volume_button.setToolTip("")
-            self.volume_popup = VolumePopup(self)
-            self.volume_popup.changed.connect(self._set_player_volume)
-            self.volume_popup.set_level(self.playback_level)
-            self.volume_button.installEventFilter(self)
-            self.volume_popup.installEventFilter(self)
-            self.volume_hide = QTimer(self)
-            self.volume_hide.setSingleShot(True)
-            self.volume_hide.setInterval(250)
-            self.volume_hide.timeout.connect(self._hide_volume_popup)
-            self.fullscreen_button = TransportButton("fullscreen", "全屏", self._toggle_fullscreen)
-            controls_layout.addWidget(self.fullscreen_button)
-            player_layout.addWidget(controls)
-            layout.addWidget(self.player, 1)
+            self._build_video_page()
         if isinstance(self.info, (VideoInfo, AudioInfo)):
-            self.audio_page, layout = self._page("音频" if self.embedded and self.video_page else "音轨", "wave")
-            self.audio_layout = layout
-            layout.setContentsMargins(0, 6, 0, 0)
-            self.audio_view = self._preview_label(WaveView(self._can_drop_audio))
-            self.audio_view.setStyleSheet("")
-            self.audio_view.setObjectName("waveCanvas")
-            self.audio_view.media_dropped.connect(self._drop_audio)
-            self.audio_view.trim_changed.connect(self._update_audio_overflow)
-            self.audio_view.window_requested.connect(self._focus_audio_window)
-            self.audio_view.range_selected.connect(self._wave_selected)
-            self.audio_view.seek.connect(self._click_audio)
-            self.audio_view.view_changed.connect(self._update_audio_toolbar)
-            self.audio_view.context_requested.connect(self._show_audio_context_menu)
-            self.audio_view.edit_command.connect(self._audio_command)
-            self.audio_context_menu = QMenu(self)
-            audio_header = QFrame()
-            audio_header.setObjectName("waveToolbar")
-            transport = QHBoxLayout(audio_header)
-            transport.setContentsMargins(9, 3, 7, 3)
-            self.audio_play = _button("播放", self._toggle_audio_playback)
-            self.audio_play.setObjectName("primary")
-            self.audio_play.setProperty("studioAccent", True)
-            self.audio_play.setMinimumWidth(64)
-            self.audio_play.setEnabled(False)
-            self.audio_play.setIcon(icons.icon("play", 16, "#FFFFFF"))
-            self.audio_position = _text("0:00.000", muted=True)
-            transport.addWidget(_icon_label("wave", 18, C.accent.name()))
-            transport.addWidget(_text("波形", name="studioSection"))
-            transport.addWidget(self.audio_position)
-            transport.addStretch(1)
-            self.zoom_out = _button("−", lambda: self.audio_view.zoom(.5))
-            self.zoom_out.setToolTip("缩小波形时间范围")
-            self.zoom_in = _button("+", lambda: self.audio_view.zoom(2))
-            self.zoom_in.setToolTip("放大波形时间范围")
-            self.zoom_reset = _button("复位", self._reset_audio_view)
-            self.zoom_reset.setToolTip("恢复波形缩放，将播放头和黑色插入线移到开头")
-            self.zoom_ratio = _text("1×", muted=True)
-            self.zoom_ratio.setToolTip("时间轴缩放比例。放大到采样级时显示当前时间跨度。")
-            for widget in (self.zoom_out, self.zoom_ratio, self.zoom_in, self.zoom_reset):
-                transport.addWidget(widget)
-            transport.addWidget(self.audio_play)
-            layout.addWidget(audio_header)
-            layout.addWidget(self.audio_view, 1)
-            self.audio_label = _text("", muted=True)
-            self.audio_label.setWordWrap(True)
-            layout.addWidget(self.audio_label)
-            self.audio_list = QListWidget()
-            self.audio_list.setMaximumHeight(72)
-            self.audio_list.setObjectName("audioClips")
-            self.audio_list.setToolTip("组成当前音轨的片段")
-            self.audio_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            hide_vertical_scroll_bar(self.audio_list)
-            layout.addWidget(self.audio_list)
+            self._build_audio_page()
         if isinstance(self.info, (VideoInfo, ImageInfo)):
-            self.image_page, layout = self._page("图片", "image")
-            layout.setContentsMargins(0, 6, 0, 0)
-            self.image_view = PictureView()
-            self.image_view.setStyleSheet("")
-            self.image_view.setObjectName("imageCanvas")
-            layout.addWidget(self.image_view, 1)
-            if self.video_page is not None:
-                self.tabs.setTabToolTip(self.tabs.indexOf(self.image_page), "预览最靠前选区的首帧，未选帧时预览视频首帧")
+            self._build_image_page()
+        self._build_details_page()
+        inspector_layout = self._build_inspector()
+        self._build_timeline()
+        self._build_progress(inspector_layout)
+        self._initialize_layout_and_settings()
+
+    def _build_video_page(self):
+        self.video_page, layout = self._page("视频" if self.embedded else "视频帧", "video")
+        layout.setContentsMargins(0, 6, 0, 0)
+        self.video_layout = layout
+        self.cursor = _spin()
+        self.cursor.setSuffix(" 帧")
+        self.cursor.setFixedWidth(88)
+        self.cursor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.cursor.valueChanged.connect(self._cursor_changed)
+
+        self.player = QFrame()
+        self.player.setObjectName("videoPlayer")
+        player_layout = QVBoxLayout(self.player)
+        player_layout.setContentsMargins(0, 0, 0, 0)
+        player_layout.setSpacing(0)
+        self.frame_view = self._preview_label(VideoPreview())
+        self.frame_view.setObjectName("videoCanvas")
+        self.frame_view.setMinimumHeight(150)
+        badges = QVBoxLayout(self.frame_view)
+        badges.setContentsMargins(10, 9, 10, 0)
+        player_header = QHBoxLayout()
+        player_header.setSpacing(5)
+        container = self.path.suffix.lstrip(".").upper() or "VIDEO"
+        player_header.addWidget(_text(container, name="playerBadge"))
+        player_header.addWidget(_text(self.info.codec, name="playerBadge"))
+        player_header.addWidget(_text(f"{self.info.width} × {self.info.height}", name="playerBadge"))
+        player_header.addWidget(_text(f"{self.info.fps:g} FPS", name="playerBadge"))
+        player_header.addStretch(1)
+        badges.addLayout(player_header)
+        badges.addStretch(1)
+        player_layout.addWidget(self.frame_view, 1)
+
+        controls = QFrame()
+        controls.setObjectName("playerControls")
+        self.player_controls = controls
+        controls_layout = QHBoxLayout(controls)
+        controls_layout.setContentsMargins(10, 7, 10, 8)
+        controls_layout.setSpacing(6)
+        self.previous_frame_button = TransportButton("previous", "上一帧", self._previous)
+        self.play_button = TransportButton("play", "播放", self._toggle_playback, primary=True)
+        self.play_button.setEnabled(False)
+        self.next_frame_button = TransportButton("next", "下一帧", self._next)
+        for widget in (self.previous_frame_button, self.play_button, self.next_frame_button):
+            widget.setEnabled(False)
+            controls_layout.addWidget(widget)
+        self.player_time_current = _text("00:00.000", name="playerTime")
+        self.player_time_current.setContentsMargins(5, 0, 0, 0)
+        controls_layout.addWidget(self.player_time_current)
+        self.player_time_short = _text("00:00", name="playerTime")
+        self.player_time_short.hide()
+        controls_layout.addWidget(self.player_time_short)
+        self.player_time_separator = _text("/", name="playerTime")
+        controls_layout.addWidget(self.player_time_separator)
+        self.player_time_total = _text("00:00.000", name="playerTime")
+        controls_layout.addWidget(self.player_time_total)
+        self.player_seek = SeekSlider(Qt.Orientation.Horizontal)
+        self.player_seek.setObjectName("playerSeek")
+        self.player_seek.setAccessibleName("视频播放位置")
+        self.player_seek.setRange(1, 1)
+        self.player_seek.setSingleStep(1)
+        self.player_seek.setPageStep(1)
+        self.player_seek.setMinimumWidth(42)
+        self.player_seek.setEnabled(False)
+        self.player_seek.valueChanged.connect(self._seek_from_player)
+        controls_layout.addWidget(self.player_seek, 1)
+        self.volume_button = TransportButton("volume", "静音 / 恢复音量", self._toggle_player_mute)
+        controls_layout.addWidget(self.volume_button)
+        self.volume_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.volume_button.customContextMenuRequested.connect(self._show_player_volume)
+        self.volume_button.installEventFilter(self)
+        self.volume_hide = QTimer(self)
+        self.volume_hide.setSingleShot(True)
+        self.volume_hide.setInterval(260)
+        self.volume_hide.timeout.connect(lambda: self.volume_menu.hide()
+                                         if self.volume_menu.isVisible() else None)
+        self.volume_menu = QMenu(self.volume_button)
+        volume_action = QWidgetAction(self.volume_menu)
+        volume_panel = QWidget()
+        volume_layout = QHBoxLayout(volume_panel)
+        volume_layout.addWidget(_text("音量"))
+        self.player_volume = WheelSlider(Qt.Orientation.Horizontal, wheel_step=5)
+        self.player_volume.setRange(0, 100)
+        self.player_volume.setValue(self.playback_level)
+        self.player_volume.setAccessibleName("播放音量")
+        self.player_volume.setFixedWidth(110)
+        self.player_volume.valueChanged.connect(self._set_player_volume)
+        volume_layout.addWidget(self.player_volume)
+        self.volume_value = _text("100%")
+        self.volume_value.setMinimumWidth(36)
+        volume_layout.addWidget(self.volume_value)
+        volume_action.setDefaultWidget(volume_panel)
+        self.volume_menu.addAction(volume_action)
+        self.volume_options = TransportButton("down", "调整播放音量", self._show_player_volume)
+        self.volume_options.setFixedSize(24, 32)
+        self.volume_options.hide()
+        self.volume_button.setToolTip("")
+        self.volume_popup = VolumePopup(self)
+        self.volume_popup.changed.connect(self._set_player_volume)
+        self.volume_popup.set_level(self.playback_level)
+        self.volume_button.installEventFilter(self)
+        self.volume_popup.installEventFilter(self)
+        self.volume_hide = QTimer(self)
+        self.volume_hide.setSingleShot(True)
+        self.volume_hide.setInterval(250)
+        self.volume_hide.timeout.connect(self._hide_volume_popup)
+        self.fullscreen_button = TransportButton("fullscreen", "全屏", self._toggle_fullscreen)
+        controls_layout.addWidget(self.fullscreen_button)
+        player_layout.addWidget(controls)
+        layout.addWidget(self.player, 1)
+
+    def _build_audio_page(self):
+        self.audio_page, layout = self._page("音频" if self.embedded and self.video_page else "音轨", "wave")
+        self.audio_layout = layout
+        layout.setContentsMargins(0, 6, 0, 0)
+        self.audio_view = self._preview_label(WaveView(self._can_drop_audio))
+        self.audio_view.setStyleSheet("")
+        self.audio_view.setObjectName("waveCanvas")
+        self.audio_view.media_dropped.connect(self._drop_audio)
+        self.audio_view.trim_changed.connect(self._update_audio_overflow)
+        self.audio_view.window_requested.connect(self._focus_audio_window)
+        self.audio_view.range_selected.connect(self._wave_selected)
+        self.audio_view.seek.connect(self._click_audio)
+        self.audio_view.view_changed.connect(self._update_audio_toolbar)
+        self.audio_view.context_requested.connect(self._show_audio_context_menu)
+        self.audio_view.edit_command.connect(self._audio_command)
+        self.audio_context_menu = QMenu(self)
+        audio_header = QFrame()
+        audio_header.setObjectName("waveToolbar")
+        transport = QHBoxLayout(audio_header)
+        transport.setContentsMargins(9, 3, 7, 3)
+        self.audio_play = _button("播放", self._toggle_audio_playback)
+        self.audio_play.setObjectName("primary")
+        self.audio_play.setProperty("studioAccent", True)
+        self.audio_play.setMinimumWidth(64)
+        self.audio_play.setEnabled(False)
+        self.audio_play.setIcon(icons.icon("play", 16, "#FFFFFF"))
+        self.audio_position = _text("0:00.000", muted=True)
+        transport.addWidget(_icon_label("wave", 18, C.accent.name()))
+        transport.addWidget(_text("波形", name="studioSection"))
+        transport.addWidget(self.audio_position)
+        transport.addStretch(1)
+        self.zoom_out = _button("−", lambda: self.audio_view.zoom(.5))
+        self.zoom_out.setToolTip("缩小波形时间范围")
+        self.zoom_in = _button("+", lambda: self.audio_view.zoom(2))
+        self.zoom_in.setToolTip("放大波形时间范围")
+        self.zoom_reset = _button("复位", self._reset_audio_view)
+        self.zoom_reset.setToolTip("恢复波形缩放，将播放头和黑色插入线移到开头")
+        self.zoom_ratio = _text("1×", muted=True)
+        self.zoom_ratio.setToolTip("时间轴缩放比例。放大到采样级时显示当前时间跨度。")
+        for widget in (self.zoom_out, self.zoom_ratio, self.zoom_in, self.zoom_reset):
+            transport.addWidget(widget)
+        transport.addWidget(self.audio_play)
+        layout.addWidget(audio_header)
+        layout.addWidget(self.audio_view, 1)
+        self.audio_label = _text("", muted=True)
+        self.audio_label.setWordWrap(True)
+        layout.addWidget(self.audio_label)
+        self.audio_list = QListWidget()
+        self.audio_list.setMaximumHeight(72)
+        self.audio_list.setObjectName("audioClips")
+        self.audio_list.setToolTip("组成当前音轨的片段")
+        self.audio_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        hide_vertical_scroll_bar(self.audio_list)
+        layout.addWidget(self.audio_list)
+
+    def _build_image_page(self):
+        self.image_page, layout = self._page("图片", "image")
+        layout.setContentsMargins(0, 6, 0, 0)
+        self.image_view = PictureView()
+        self.image_view.setStyleSheet("")
+        self.image_view.setObjectName("imageCanvas")
+        layout.addWidget(self.image_view, 1)
+        if self.video_page is not None:
+            self.tabs.setTabToolTip(self.tabs.indexOf(self.image_page), "预览最靠前选区的首帧，未选帧时预览视频首帧")
+
+    def _build_details_page(self):
         self.details_page, details_layout = self._page("文件详情", "file")
         details_layout.setContentsMargins(12, 12, 12, 12)
         self.details_view = DetailsView(wide=True)
@@ -1396,6 +572,7 @@ class Editor(QDialog):
         details_layout.addWidget(self.details_view, 1)
         self._update_file_details()
 
+    def _build_inspector(self):
         inspector = QFrame()
         inspector.setObjectName("studioInspector")
         inspector.setMinimumWidth(306)
@@ -1440,6 +617,15 @@ class Editor(QDialog):
             field.valueChanged.connect(self._range_fields_changed)
         self._selection_note = ""
 
+        self._build_audio_tools()
+        self._build_picture_export(stack)
+        self._build_output_settings(side, stack)
+        self.workspace_split.addWidget(inspector)
+        self.workspace_split.setStretchFactor(0, 1)
+        self.workspace_split.setSizes([max(420, self.width() - 394), 394])
+        return side
+
+    def _build_audio_tools(self):
         self.audio_tools = QFrame()
         self.audio_tools.setObjectName("audioSelectionCard")
         self.audio_tools.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1516,6 +702,7 @@ class Editor(QDialog):
         audio.addLayout(_line(_text("选区音量"), self.volume, self.apply_volume))
         self.audio_tools.hide()
 
+    def _build_picture_export(self, stack):
         self.picture_group = QFrame()
         self.picture_group.setObjectName("pictureExportCard")
         self.picture_group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1620,6 +807,8 @@ class Editor(QDialog):
         self.picture_save.hide()
         stack.addWidget(self.picture_group)
 
+    def _build_output_settings(self, side, stack):
+        info = self.info
         self.export_group = QWidget()
         self.export_group.setObjectName("sharedExportBody")
         self.export_group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -1995,10 +1184,8 @@ class Editor(QDialog):
         stack.addWidget(self.estimate_card)
         stack.addWidget(self.directory_group)
         stack.addStretch(1)
-        self.workspace_split.addWidget(inspector)
-        self.workspace_split.setStretchFactor(0, 1)
-        self.workspace_split.setSizes([max(420, self.width() - 394), 394])
 
+    def _build_timeline(self):
         self.timeline = QFrame()
         self.timeline.setObjectName("timelineCard")
         timeline = QVBoxLayout(self.timeline)
@@ -2065,6 +1252,7 @@ class Editor(QDialog):
         self.preview_split.setStretchFactor(1, 0)
         self.preview_split.setStretchFactor(2, 0)
 
+    def _build_progress(self, side):
         self.progress_row = QWidget()
         progress_layout = QHBoxLayout(self.progress_row)
         progress_layout.setContentsMargins(0, 0, 0, 0)
@@ -2089,6 +1277,8 @@ class Editor(QDialog):
         else:
             side.addWidget(self.progress_row)
             side.insertWidget(1, self.notice)
+
+    def _initialize_layout_and_settings(self):
         for splitter, tooltip, cursor in (
             (self.workspace_split, "拖动边界调整预览区和右侧设置的宽度", Qt.CursorShape.SplitHCursor),
             (self.preview_split, "拖动边界调整预览区和时间线的高度", Qt.CursorShape.SplitVCursor),
