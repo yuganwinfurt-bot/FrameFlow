@@ -1020,9 +1020,9 @@ class MainWindow(QMainWindow):
     def _set_output_stem(self, job, text: str) -> None:
         job.output_stem = text
         if editor := self.editors.get(job.key):
-            if editor.output_stem_edit.text() != text:
-                editor.output_stem_edit.setText(text)
-            editor._update_output_location()
+            if editor.settings.output_stem_edit.text() != text:
+                editor.settings.output_stem_edit.setText(text)
+            editor.settings.update_output_location()
         if self._selected() is job:
             if self.output_stem_edit.text() != text:
                 self.output_stem_edit.setText(text)
@@ -1118,7 +1118,7 @@ class MainWindow(QMainWindow):
             self.inspector.setFixedWidth(width)
             for editor in self.editors.values():
                 editor.inspector.setFixedWidth(width)
-                editor.fit_settings_density(self.height() < 850 or editor.configuration_only)
+                editor.settings.refresh_density()
             self.page_transition.rail_width = self._rail_width()
             self.page_transition.invalidate()
         if hasattr(self, "preview"):
@@ -1186,7 +1186,7 @@ class MainWindow(QMainWindow):
         self.batch_format.setEnabled(not busy and bool(formats))
         self.batch_settings_button.setEnabled(not busy and bool(formats))
         if self.mounted_editor is not None:
-            self.mounted_editor.settings_body.setEnabled(not busy and selected is not None and selected.queued)
+            self.mounted_editor.settings.setEnabled(not busy and selected is not None and selected.queued)
         self.clear_button.setEnabled(has_files and not busy)
         resizable = bool(formats & RESIZABLE_FORMATS)
         self.resolution.setVisible(not formats or resizable)
@@ -1280,48 +1280,30 @@ class MainWindow(QMainWindow):
         self._unmount_settings()
         if editor is not None:
             editor.mount_settings(self.shared_settings)
-            editor.fit_settings_density(True)
-            if hasattr(editor, "quality"):
+            editor.settings.refresh_density()
+            if hasattr(editor.settings, "quality"):
                 # 以编辑器当前值为准，避免切页时把用户刚调好的质量打回默认
-                self.quality.setValue(editor.quality.value())
-            editor.settings_body.setEnabled(self.scope is None and job.queued)
+                self.quality.setValue(editor.settings.quality.value())
+            editor.settings.setEnabled(self.scope is None and job.queued)
             self.mounted_editor = editor
 
     def _attach_output_stem(self, editor, job) -> None:
-        """在编辑器创建时把「输出文件名」挂到共享的保存目录卡片。"""
-        layout = editor.directory_group.layout()
-        hint = QLabel("输出文件名")
-        hint.setObjectName("paramLabel")
-        layout.addWidget(hint)
-        line = QWidget()
-        line_layout = QHBoxLayout(line)
-        line_layout.setContentsMargins(0, 0, 0, 0)
-        line_layout.setSpacing(6)
-        editor.output_stem_edit = QLineEdit()
-        editor.output_stem_edit.setPlaceholderText("输出文件名")
-        editor.output_stem_edit.setMinimumHeight(30)
-        editor.output_stem_edit.setText(job.output_stem or job.path.stem)
-        editor.output_stem_edit.textEdited.connect(lambda text: self._set_output_stem(job, text))
-        line_layout.addWidget(editor.output_stem_edit, 1)
-        editor.output_stem_ext = QLabel("")
-        editor.output_stem_ext.setMinimumWidth(46)
-        line_layout.addWidget(editor.output_stem_ext)
-        layout.addWidget(line)
-        editor._update_output_location()
+        editor.settings.bind_output_name(job.output_stem or job.path.stem,
+                                         lambda text: self._set_output_stem(job, text))
 
     def _quality_changed(self, value: int) -> None:
         """转换页的滑块与预览页的滑块共用一份质量参数。"""
         editor = self.mounted_editor
-        if editor is not None and hasattr(editor, "quality"):
-            if editor.quality.value() != int(value):
-                editor.quality.setValue(int(value))
+        if editor is not None and hasattr(editor.settings, "quality"):
+            if editor.settings.quality.value() != int(value):
+                editor.settings.quality.setValue(int(value))
 
     def _unmount_settings(self):
         if editor := self.mounted_editor:
             self.mounted_editor = None
             editor.mount_settings()
-            editor.fit_settings_density(self.height() < 850)
-            editor.settings_body.setEnabled(True)
+            editor.settings.refresh_density()
+            editor.settings.setEnabled(True)
 
     def _change_job_format(self, job, kind):
         job.output_format = kind
@@ -1423,7 +1405,7 @@ class MainWindow(QMainWindow):
                 current.suspend()
             if isinstance(page, Editor):
                 page.inspector.setFixedWidth(self._settings_width())
-                page.fit_settings_density(self.height() < 850 or page.configuration_only)
+                page.settings.refresh_density()
             self.pages.setCurrentWidget(page)
             if isinstance(page, Editor):
                 page.start_media()

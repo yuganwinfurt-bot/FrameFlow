@@ -38,7 +38,7 @@ class WorkflowFixture(MediaFixture, GuiTestCase):
         return window
 
     def enter_output_name(self, editor, name):
-        field = editor.output_stem_edit
+        field = editor.settings.output_stem_edit
         parent = field.parentWidget()
         while parent is not None and not isinstance(parent, QScrollArea):
             parent = parent.parentWidget()

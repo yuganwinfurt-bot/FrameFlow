@@ -176,7 +176,7 @@ class AgentWorkspaceTest(GuiTestCase):
         for _ in range(30):
             wheel(settings, -120)
         self.assertEqual(bar.value(), bar.maximum())
-        field = editor.output_stem_edit
+        field = editor.settings.output_stem_edit
         self.assertTrue(field.isVisibleTo(settings))
         self.assertTrue(settings.viewport().rect().contains(field.mapTo(settings.viewport(), field.rect().center())))
 
@@ -265,8 +265,8 @@ class AgentWorkspaceTest(GuiTestCase):
                 self.assertEqual(value(), original)
                 self.assertGreater((before - bar.value()) * direction, 0)
 
-        controls = (editor.preset, editor.container, editor.codec, editor.acceleration,
-                    editor.export_edge, editor.output_fps, editor.audio_bitrate)
+        controls = (editor.settings.preset, editor.settings.container, editor.settings.codec, editor.settings.acceleration,
+                    editor.settings.export_edge, editor.settings.output_fps, editor.settings.audio_bitrate)
         for page in (0, 1, 2, 0):
             self.nav(page)
             self.settle()
@@ -276,7 +276,7 @@ class AgentWorkspaceTest(GuiTestCase):
             for control in controls:
                 with self.subTest(page=page, control=control.toolTip()):
                     check_control(area, control)
-            field = editor.output_stem_edit
+            field = editor.settings.output_stem_edit
             self.assertTrue(area.isAncestorOf(field) and field.isVisible())
             area.ensureWidgetVisible(field)
             self.assertTrue(area.viewport().rect().contains(field.mapTo(area.viewport(), field.rect().center())))
@@ -284,17 +284,17 @@ class AgentWorkspaceTest(GuiTestCase):
 
         # Exercise an inline numeric editor, whose wheel initially arrives at its QLineEdit child.
         double = QDoubleSpinBox()
-        editor.settings_body.layout().addWidget(double)
+        editor.settings.layout().addWidget(double)
         double.setValue(12.5)
         self.wait(double.isVisible)
         check_control(window.inspector_scroll, double, double.lineEdit())
         QTest.keyClick(double, Qt.Key.Key_Up)
         self.assertGreater(double.value(), 12.5)
 
-        fps = editor.output_fps.currentIndex()
-        QTest.keyClick(editor.output_fps, Qt.Key.Key_Down)
-        self.assertGreater(editor.output_fps.currentIndex(), fps)
-        slider = editor.quality.slider
+        fps = editor.settings.output_fps.currentIndex()
+        QTest.keyClick(editor.settings.output_fps, Qt.Key.Key_Down)
+        self.assertGreater(editor.settings.output_fps.currentIndex(), fps)
+        slider = editor.settings.quality.slider
         quality = slider.value()
         QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() - 15, slider.height() // 2))
         self.assertNotEqual(slider.value(), quality)
@@ -305,13 +305,13 @@ class AgentWorkspaceTest(GuiTestCase):
             self.nav(page)
             self.settle()
             editor = window.editors[self.keys[0]]
-            quality = editor.quality
+            quality = editor.settings.quality
             quality.setValue(23)
-            editor._refresh_estimate()
-            before = editor.estimate_rows["output"].text()
+            editor.settings.refresh_estimate()
+            before = editor.settings.estimate_rows["output"].text()
             self.send_parameter_wheel(quality.slider, angle=120)
             self.assertEqual(quality.readout.text(), "CRF 22")
-            self.assertNotEqual(editor.estimate_rows["output"].text(), before)
+            self.assertNotEqual(editor.settings.estimate_rows["output"].text(), before)
             self.send_parameter_wheel(quality.slider, angle=-120, pixels=-32)
             self.assertEqual(quality.value(), 23)
             self.send_parameter_wheel(quality.slider, angle=120, point=QPoint(-2, 4))
@@ -749,8 +749,8 @@ class AgentWorkspaceTest(GuiTestCase):
             self.nav(1)
             self.settle()
             self.assertEqual(editor.output_options().max_edge, 160)
-            self.assertEqual(editor.output_stem_edit.text(), "测试 Agent (最终)")
-            self.assertEqual(editor.directory, out)
+            self.assertEqual(editor.settings.output_stem_edit.text(), "测试 Agent (最终)")
+            self.assertEqual(editor.settings.directory, out)
             self.nav(2)
             self.settle()
             QTest.mouseClick(plan.card.confirm, Qt.MouseButton.LeftButton)

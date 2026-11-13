@@ -62,7 +62,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         self.app.processEvents()
         self.assertFalse(hasattr(editor, "frame_label"))
         self.assertTrue(editor.media_summary.isVisible())
-        self.assertTrue(editor.directory_group.isVisible())
+        self.assertTrue(editor.settings.directory_group.isVisible())
         self.assertTrue(editor.play_button.visibleRegion().boundingRect().contains(editor.play_button.rect()))
         first_item = window.preview_files.item(0)
         QTest.mouseClick(window.preview_files.viewport(), Qt.MouseButton.LeftButton,
@@ -81,7 +81,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         window.add_paths([self.source])
         self.wait_for(lambda: window.mounted_editor is not None, "转换设置就绪")
         editor = window.mounted_editor
-        settings = editor.settings_body
+        settings = editor.settings
         host = window.page_host
         transition = window.page_transition
         start_queue = window.queue_card.geometry()
@@ -240,7 +240,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         forward = [sample(level) for level in levels]
         animation.resume()
         self.wait_for(lambda: not transition.running, "预览端点")
-        self.assertIs(editor.settings_scroll.widget(), editor.settings_body)
+        self.assertIs(editor.settings_scroll.widget(), editor.settings)
         click(0)
         animation.pause()
         backward = [sample(level) for level in reversed(levels)]
@@ -298,7 +298,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         editor = window.pages.currentWidget()
         transition = window.page_transition
         self.wait_for(lambda: editor.frames and editor.scope is None and not transition.running, "视频预览就绪")
-        editor.quality.setValue(27)
+        editor.settings.quality.setValue(27)
         editor.player_volume.setValue(35)
         video = tuple(editor.video)
         with patch("frameflow.playback.WaveOutput"):
@@ -321,7 +321,7 @@ class DesktopTransitionsTest(WorkflowFixture):
         self.assertEqual(tuple(editor.video), video)
         self.assertEqual(editor.cursor.value(), paused_at)
         self.assertEqual(editor.player_volume.value(), 35)
-        self.assertEqual(editor.quality.value(), 27)
+        self.assertEqual(editor.settings.quality.value(), 27)
         self.assertEqual(window._selected().path, self.source)
 
     def test_page_transition_during_batch_conversion_and_editor_export(self):
@@ -352,7 +352,7 @@ class DesktopTransitionsTest(WorkflowFixture):
                     self.assertIs(window.scope, scope)
                     self.assertFalse(scope.cancelled.is_set())
                 self.assertTrue(window.cancel_button.isEnabled())
-                self.assertFalse(window.mounted_editor.settings_body.isEnabled())
+                self.assertFalse(window.mounted_editor.settings.isEnabled())
             finally:
                 release.set()
             self.wait_for(lambda: window.scope is None, "转换完成")

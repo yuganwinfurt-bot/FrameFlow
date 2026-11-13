@@ -180,8 +180,8 @@ class EditorPlaybackTest(WorkflowFixture):
                                                    editor.media_summary.rect().bottomLeft()).y(),
                         video_inspector.bottom())
         # 设置可以滚动，主任务栏的导出按钮始终可用。
-        self.assertTrue(editor.quality.isVisible())
-        self.assertFalse(editor.quality.slider.isHidden())
+        self.assertTrue(editor.settings.quality.isVisible())
+        self.assertFalse(editor.settings.quality.slider.isHidden())
         self.assertTrue(window.preview_start.isEnabled())
         self.assertTrue(window.preview_start.visibleRegion().boundingRect().contains(window.preview_start.rect()))
         editor.cursor.setValue(8)
@@ -199,7 +199,7 @@ class EditorPlaybackTest(WorkflowFixture):
         self.app.processEvents()
         self.assertEqual(inspector.geometry(), video_inspector)
         self.assertTrue(editor.timeline.isHidden())
-        self.assertTrue(editor.picture_group.isHidden())
+        self.assertTrue(editor.settings.picture_group.isHidden())
         self.assertLess(editor.zoom_reset.geometry().right(), editor.audio_play.geometry().left())
         initial = view.interval
         selection = view.selection
@@ -335,9 +335,9 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertIn("320 × 180", joined)
         self.assertIn("24 FPS", joined)
         self.assertGreaterEqual(editor.preview_split.indexOf(editor.media_summary), 0)
-        self.assertTrue(editor.output_file_name.text().endswith("_编辑.mp4"))
-        self.assertTrue(editor.acceleration.isVisible())
-        self.assertEqual(editor.acceleration.itemData(0), "cpu")
+        self.assertTrue(editor.settings.output_file_name.text().endswith("_编辑.mp4"))
+        self.assertTrue(editor.settings.acceleration.isVisible())
+        self.assertEqual(editor.settings.acceleration.itemData(0), "cpu")
         self.assertTrue(editor.progress_row.isHidden())
         self.assertFalse(hasattr(editor, "frame_label"))
         self.assertIn("CPU 软件编码", [title for _, title in hardware_acceleration_choices(
@@ -348,7 +348,7 @@ class EditorPlaybackTest(WorkflowFixture):
             self.assertEqual(args[0:2], ["-c:v", f"h264_{backend}"])
         self.assertTrue(editor.inspector.isVisible())
         self.assertTrue(editor.selection_label.isVisible())
-        self.assertTrue(editor.export_group.isVisible())
+        self.assertTrue(editor.settings.export_group.isVisible())
 
         editor.player_seek.setValue(9)
         self.assertEqual(editor.cursor.value(), 9)
@@ -366,10 +366,10 @@ class EditorPlaybackTest(WorkflowFixture):
         editor._set_video_range(2, tail)
         editor._range_fields_changed()
         self.assertEqual(editor.video_selection, ((2, tail),))
-        self.assertIn("1080P", editor.export_edge.itemText(editor.export_edge.findData(1920)))
-        editor.export_edge.setCurrentIndex(editor.export_edge.findData(854))
-        self.assertIn("854 × 480", editor.export_dimensions.text())
-        editor.output_fps.setCurrentIndex(editor.output_fps.findData(60))
+        self.assertIn("1080P", editor.settings.export_edge.itemText(editor.settings.export_edge.findData(1920)))
+        editor.settings.export_edge.setCurrentIndex(editor.settings.export_edge.findData(854))
+        self.assertIn("854 × 480", editor.settings.export_dimensions.text())
+        editor.settings.output_fps.setCurrentIndex(editor.settings.output_fps.findData(60))
         result = self.root / "片段60FPS.mp4"
         with patch("frameflow.editor.QFileDialog.getSaveFileName",
                    return_value=(str(result), "MP4 视频 (*.mp4)")):

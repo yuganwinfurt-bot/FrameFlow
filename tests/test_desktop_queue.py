@@ -82,11 +82,11 @@ class DesktopQueueTest(WorkflowFixture):
         settings = window.mounted_editor
         # 转换页复用的只是参数区：保存目录保留（就是转换页的目的地），
         # 「保存编辑结果」由主窗口自己的底栏承担。
-        self.assertTrue(settings.directory_group.isVisible())
+        self.assertTrue(settings.settings.directory_group.isVisible())
         self.assertTrue(window.output_name.full_text.endswith(".mp4"))
-        self.assertTrue(settings.acceleration.isVisible())
-        self.assertEqual(settings.acceleration.itemData(0), "cpu")
-        self.assertEqual(settings.directory_path.path, str(self.root))
+        self.assertTrue(settings.settings.acceleration.isVisible())
+        self.assertEqual(settings.settings.acceleration.itemData(0), "cpu")
+        self.assertEqual(settings.settings.directory_path.path, str(self.root))
         output_directory = self.root / ("保存位置" * 13) / "输出"
         with patch("frameflow.window.QFileDialog.getExistingDirectory",
                    return_value=str(output_directory)) as choose:
@@ -171,8 +171,8 @@ class DesktopQueueTest(WorkflowFixture):
         editor = window.mounted_editor
         destination = self.root / "转换输出"
         destination.mkdir()
-        with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(destination)):
-            editor.choose_directory()
+        with patch("frameflow.editor_settings.QFileDialog.getExistingDirectory", return_value=str(destination)):
+            editor.settings.choose_directory()
 
         self.enter_output_name(editor, "坏/名称")
         QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
@@ -208,34 +208,34 @@ class DesktopQueueTest(WorkflowFixture):
         first = window._selected()
         shared = window.mounted_editor
         self.assertFalse(shared.media_started)
-        shared.container.setCurrentIndex(shared.container.findData("MKV"))
-        shared.codec.setCurrentIndex(shared.codec.findData("mkv_hevc"))
-        shared.export_edge.setCurrentIndex(shared.export_edge.findData(1280))
-        shared.output_fps.setCurrentIndex(shared.output_fps.findData(30))
+        shared.settings.container.setCurrentIndex(shared.settings.container.findData("MKV"))
+        shared.settings.codec.setCurrentIndex(shared.settings.codec.findData("mkv_hevc"))
+        shared.settings.export_edge.setCurrentIndex(shared.settings.export_edge.findData(1280))
+        shared.settings.output_fps.setCurrentIndex(shared.settings.output_fps.findData(30))
         self.assertEqual((first.export_settings.format, first.export_settings.max_edge,
                           first.export_settings.output_fps), ("mkv_hevc", 1280, 30))
         window.navigation.setCurrentIndex(1)
         self.assertIs(window.pages.currentWidget(), shared)
         self.wait_for(lambda: not window.page_transition.running, "预览转场结束")
-        self.assertIs(shared.settings_scroll.widget(), shared.settings_body)
+        self.assertIs(shared.settings_scroll.widget(), shared.settings)
         self.wait_for(lambda: shared.frames and shared.scope is None, "视频读取结束")
-        shared.quality.setValue(27)
+        shared.settings.quality.setValue(27)
         directory = self.root / "仅第一个文件"
-        with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(directory)):
+        with patch("frameflow.editor_settings.QFileDialog.getExistingDirectory", return_value=str(directory)):
             shared.choose_directory()
         window.navigation.setCurrentIndex(0)
         self.wait_for(lambda: not window.page_transition.running, "返回转换页")
         self.assertIs(window.mounted_editor, shared)
-        self.assertEqual(shared.quality.value(), 27)
+        self.assertEqual(shared.settings.quality.value(), 27)
         self.assertEqual(window._job_export(first).quality, 27)
         self.assertEqual(window._job_export(first).directory, directory)
         window.list.setCurrentRow(1)
-        self.assertEqual(window.mounted_editor.format.currentData(), "mp4")
-        self.assertEqual(window.mounted_editor.export_edge.currentData(), 0)
-        self.assertEqual(window.mounted_editor.directory, second.parent)
+        self.assertEqual(window.mounted_editor.settings.format.currentData(), "mp4")
+        self.assertEqual(window.mounted_editor.settings.export_edge.currentData(), 0)
+        self.assertEqual(window.mounted_editor.settings.directory, second.parent)
         window.list.setCurrentRow(0)
         self.assertIs(window.mounted_editor, shared)
-        self.assertEqual(shared.codec.currentData(), "mkv_hevc")
+        self.assertEqual(shared.settings.codec.currentData(), "mkv_hevc")
 
     def test_video_resolution_label_and_export_are_shared_across_workspaces(self):
         source = self.root / "分辨率样片.mp4"
@@ -256,17 +256,17 @@ class DesktopQueueTest(WorkflowFixture):
             info = probe(job.output, self.tools, Processes())
             return info.width, info.height
 
-        self.assertEqual(editor.export_edge.currentText(), "原始分辨率")
+        self.assertEqual(editor.settings.export_edge.currentText(), "原始分辨率")
         self.assertEqual(editor.output_options().max_edge, 0)
         self.assertEqual(export_size(), (1280, 720))
 
         window.navigation.setCurrentIndex(1)
         self.wait_for(lambda: not window.page_transition.running, "进入预览工作区")
-        self.assertEqual(editor.export_edge.currentText(), "原始分辨率")
-        editor.export_edge.setCurrentIndex(editor.export_edge.findData(854))
+        self.assertEqual(editor.settings.export_edge.currentText(), "原始分辨率")
+        editor.settings.export_edge.setCurrentIndex(editor.settings.export_edge.findData(854))
         window.navigation.setCurrentIndex(0)
         self.wait_for(lambda: not window.page_transition.running, "返回转换工作区")
-        self.assertEqual(editor.export_edge.currentText(), "标准 · 480P")
+        self.assertEqual(editor.settings.export_edge.currentText(), "标准 · 480P")
         self.assertEqual(window._job_export(job).max_edge, 854)
         self.assertEqual(export_size(), (854, 480))
 

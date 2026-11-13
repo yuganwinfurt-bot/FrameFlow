@@ -33,11 +33,11 @@ class EditorExportTest(WorkflowFixture):
                       "预览转场和视频读取完成")
         self.assertIs(window._selected(), job)
         self.assertIs(window.pages.currentWidget(), editor)
-        self.assertEqual(editor.output_stem_edit.text(), "剪辑 Preview (最终)")
+        self.assertEqual(editor.settings.output_stem_edit.text(), "剪辑 Preview (最终)")
         destination = self.root / "编辑输出"
         destination.mkdir()
-        with patch("frameflow.editor.QFileDialog.getExistingDirectory", return_value=str(destination)):
-            editor.choose_directory()
+        with patch("frameflow.editor_settings.QFileDialog.getExistingDirectory", return_value=str(destination)):
+            editor.settings.choose_directory()
         QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
         self.assertIsNotNone(editor.scope)
         self.wait_for(lambda: editor.scope is None, "媒体预览导出完成")
@@ -89,11 +89,11 @@ class EditorExportTest(WorkflowFixture):
         editor.saved.connect(outputs.append)
         editor.show()
         self.wait_for(lambda: editor.frames and editor.scope is None, "视频可选帧")
-        editor.image_format.setCurrentIndex(editor.image_format.findData("png"))
-        self.assertEqual(editor.picture_quality_label.text(), "PNG 压缩级别")
-        self.assertIn("不会降低画质", editor.picture_preset_hint.text())
-        editor.image_format.setCurrentIndex(editor.image_format.findData("jpg"))
-        self.assertEqual(editor.picture_quality_label.text(), "画质")
+        editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("png"))
+        self.assertEqual(editor.settings.picture_quality_label.text(), "PNG 压缩级别")
+        self.assertIn("不会降低画质", editor.settings.picture_preset_hint.text())
+        editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("jpg"))
+        self.assertEqual(editor.settings.picture_quality_label.text(), "画质")
 
         def show_picture(number):
             tab = editor.tabs.indexOf(editor.image_page)
@@ -101,7 +101,7 @@ class EditorExportTest(WorkflowFixture):
             QTest.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(tab).center())
             self.assertIs(editor.tabs.currentWidget(), editor.image_page)
             self.assertTrue(editor.timeline.isHidden())
-            self.assertTrue(editor.export_group.isHidden())
+            self.assertTrue(editor.settings.export_group.isHidden())
             self.wait_for(lambda: editor.shown_frame == (self.source, number - 1)
                           and editor.image_view.original is not None, "图片页首帧预览")
             pass
@@ -120,7 +120,7 @@ class EditorExportTest(WorkflowFixture):
         editor._click_frame(32, Qt.KeyboardModifier.ControlModifier)
         self.assertEqual(editor.video_selection, ((7, 7), (20, 25), (32, 32)))
         show_picture(7)
-        editor.resolution.setCurrentIndex(editor.resolution.findData(256))
+        editor.settings.resolution.setCurrentIndex(editor.settings.resolution.findData(256))
         editor.save_image()
         self.wait_for(lambda: outputs and editor.scope is None, "保存最前面选区的首帧")
         self.assertTrue(outputs[0].stem.endswith("_帧000007"))
@@ -141,11 +141,11 @@ class EditorExportTest(WorkflowFixture):
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
         self.wait_for(lambda: editor.frames is not None and editor.scope is None, "读取视频帧")
-        output = editor.estimate_rows["output"]
-        delta = editor.estimate_rows["delta"]
+        output = editor.settings.estimate_rows["output"]
+        delta = editor.settings.estimate_rows["delta"]
         initial_video = output.text()
         self.assertIn("–", initial_video)
-        self.assertIn("6.760 秒", editor.estimate_card.toolTip())
+        self.assertIn("6.760 秒", editor.settings.estimate_card.toolTip())
         self.assertTrue(delta.isHidden())
 
         def select_frames(first, last):
@@ -163,7 +163,7 @@ class EditorExportTest(WorkflowFixture):
         self.assertEqual(length(editor.video), 437)
         longer_video = output.text()
         self.assertNotEqual(initial_video, longer_video)
-        self.assertIn("17.480 秒", editor.estimate_card.toolTip())
+        self.assertIn("17.480 秒", editor.settings.estimate_card.toolTip())
         select_frames(300, 310)
         editor.cut_video()
         self.assertNotEqual(output.text(), longer_video)
@@ -175,13 +175,13 @@ class EditorExportTest(WorkflowFixture):
         editor.undo()
         self.assertEqual(output.text(), longer_video)
 
-        editor.quality.setValue(28)
+        editor.settings.quality.setValue(28)
         self.wait_for(lambda: output.text() != longer_video, "CRF 改变后的范围")
         crf_video = output.text()
-        editor.export_edge.setCurrentIndex(editor.export_edge.findData(854))
+        editor.settings.export_edge.setCurrentIndex(editor.settings.export_edge.findData(854))
         self.assertNotEqual(output.text(), crf_video)
         edge_video = output.text()
-        editor.output_fps.setCurrentIndex(editor.output_fps.findData(30))
+        editor.settings.output_fps.setCurrentIndex(editor.settings.output_fps.findData(30))
         self.assertNotEqual(output.text(), edge_video)
         editor.apply_output_options(Export("mp4", self.root, quality=23, audio_bitrate=192))
         self.assertEqual(output.text(), longer_video)
@@ -196,13 +196,13 @@ class EditorExportTest(WorkflowFixture):
         self.assertGreater(exports[0].stat().st_size, 0)
 
         editor.tabs.setCurrentWidget(editor.audio_page)
-        self.assertEqual(editor.format.currentData(), "mp3")
+        self.assertEqual(editor.settings.format.currentData(), "mp3")
         self.assertEqual(output.text(), "约 420.5 KB")
-        self.assertIn("17.480 秒 × 192 kbps", editor.estimate_card.toolTip())
+        self.assertIn("17.480 秒 × 192 kbps", editor.settings.estimate_card.toolTip())
         self.assertTrue(delta.isHidden())
-        editor.audio_bitrate.setCurrentIndex(editor.audio_bitrate.findData(128))
+        editor.settings.audio_bitrate.setCurrentIndex(editor.settings.audio_bitrate.findData(128))
         self.assertEqual(output.text(), "约 280.7 KB")
-        editor.audio_bitrate.setCurrentIndex(editor.audio_bitrate.findData(192))
+        editor.settings.audio_bitrate.setCurrentIndex(editor.settings.audio_bitrate.findData(192))
         self.wait_for(lambda: editor.scope is None, "音频预览准备完成")
         editor.save_edit()
         self.wait_for(lambda: len(exports) == 2, "导出 192 kbps MP3")
@@ -211,17 +211,17 @@ class EditorExportTest(WorkflowFixture):
         self.assertAlmostEqual(audio_info.duration, 17.480, delta=.06)
         self.assertAlmostEqual(audio_info.size, 419520 + 1024, delta=3000)
 
-        editor.format.setCurrentIndex(editor.format.findData("wav"))
+        editor.settings.format.setCurrentIndex(editor.settings.format.findData("wav"))
         self.assertEqual(output.text(), f"约 {_size_text(17.48 * 48000 * 2 * 2 + 128)}")
-        editor.audio_channels.setCurrentIndex(editor.audio_channels.findData(1))
-        editor.audio_sample_rate.setCurrentIndex(editor.audio_sample_rate.findData(22050))
+        editor.settings.audio_channels.setCurrentIndex(editor.settings.audio_channels.findData(1))
+        editor.settings.audio_sample_rate.setCurrentIndex(editor.settings.audio_sample_rate.findData(22050))
         self.assertEqual(output.text(), f"约 {_size_text(17.48 * 22050 * 2 + 128)}")
-        editor.format.setCurrentIndex(editor.format.findData("flac"))
+        editor.settings.format.setCurrentIndex(editor.settings.format.findData("flac"))
         self.assertEqual(output.text(), "无法准确预估")
         self.assertTrue(delta.isHidden())
 
         editor.tabs.setCurrentWidget(editor.image_page)
-        editor.image_format.setCurrentIndex(editor.image_format.findData("png"))
+        editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("png"))
         self.assertEqual(output.text(), "正在计算…")
         old_request = editor.picture_estimate_generation
         select_frames(40, 40)
@@ -234,7 +234,7 @@ class EditorExportTest(WorkflowFixture):
         self.wait_for(lambda: len(exports) == 3, "保存当前帧 PNG")
         picture_size = exports[2].stat().st_size
         self.assertEqual(output.text(), f"约 {_size_text(picture_size)}")
-        self.assertIn(f"{picture_size:,} 字节", editor.estimate_card.toolTip())
+        self.assertIn(f"{picture_size:,} 字节", editor.settings.estimate_card.toolTip())
         self.assertEqual(probe(exports[2], self.tools, Processes()).codec, "PNG")
         current_request = editor.picture_estimate_generation
         editor.tabs.setCurrentWidget(editor.video_page)
@@ -253,19 +253,19 @@ class EditorExportTest(WorkflowFixture):
         self.assertEqual(editor.tabs.count(), 2)
         self.assertEqual(editor.tabs.tabText(0), "图片")
         self.assertEqual(editor.tabs.tabText(1), "文件详情")
-        editor.image_format.setCurrentIndex(editor.image_format.findData("png"))
-        preset = editor.picture_preset
+        editor.settings.image_format.setCurrentIndex(editor.settings.image_format.findData("png"))
+        preset = editor.settings.picture_preset
         self.assertEqual([preset.tabText(i) for i in range(preset.count())], ["快速", "均衡", "高压缩"])
         self.assertEqual(preset.currentIndex(), 1)
-        self.assertTrue(editor.size.isHidden())
+        self.assertTrue(editor.settings.size.isHidden())
         QTest.mouseClick(preset, Qt.MouseButton.LeftButton, pos=preset.tabRect(2).center())
-        self.assertTrue(editor.size.isVisible())
-        editor.size.setValue(8)
+        self.assertTrue(editor.settings.size.isVisible())
+        editor.settings.size.setValue(8)
         preset.setCurrentIndex(0)
-        self.assertTrue(editor.size.isHidden())
-        self.assertEqual(editor._picture_encoding(), (95, 0, 6))
+        self.assertTrue(editor.settings.size.isHidden())
+        self.assertEqual(editor.settings.picture_encoding(), (95, 0, 6))
         preset.setCurrentIndex(2)
-        self.assertEqual(editor.size.value(), 8)
+        self.assertEqual(editor.settings.size.value(), 8)
         outputs = []
         editor.saved.connect(outputs.append)
         editor.save_image()
