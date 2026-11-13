@@ -16,7 +16,7 @@
 
 **实现与取舍。** AI 用 `MainWindow.add_paths()` 统一入口，按路径去重并创建 `Job`。读取线程用 FFprobe 的 JSON 得到时长、尺寸和流信息，再由 FFmpeg 取真实视频帧，主线程通过信号更新列表和右栏。图片用 Pillow。FFmpeg CLI 是题目允许的方案，Python 负责构造参数、进度和错误，免去接入 FFmpeg API 的绑定工作。长音频预览只取有限区间，整轨仍可转换。
 
-**验收。** 用中文和空格路径导入并读出 320×180、24 FPS 的视频，验证实际 PNG 缩略图。损坏文件显示读取失败。Windows 窗口复测同一入口导入不同媒体，队列对重复路径只保留一项。 [导入代码](frameflow/window.py#L1566) · [媒体探测](frameflow/media.py#L269) · [回归用例](tests/test_workflow.py#L101)
+**验收。** 用中文和空格路径导入并读出 320×180、24 FPS 的视频，验证实际 PNG 缩略图。损坏文件显示读取失败。Windows 窗口复测同一入口导入不同媒体，队列对重复路径只保留一项。 [导入代码](frameflow/window.py#L1566) · [媒体探测](frameflow/media.py#L269) · [回归用例](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L101)
 
 ### 02｜让转换可取消，让成品可以安全发布
 
@@ -24,7 +24,7 @@
 
 **实现与取舍。** AI 将参数在开工前做成每项任务的快照，工作线程串行转码，解析 FFmpeg 的 `-progress pipe:1` 后发信号。每个任务的 `Processes` 只管理自己启动的子进程。转码先写同一目标目录下的临时文件，成功后由 `_publish()` 选择可用名称，Windows 上通过拒绝覆盖的重命名处理同名冲突。我还要求补上硬件加速，最终按当前 FFmpeg 能力显示选项。设备编码失败会提示并回退 CPU，用户取消则沿取消路径退出。
 
-**验收。** 在 FFmpeg 实际运行时取消或关窗，确认子进程退出且目标目录无半成品。另测首项写入失败后，下一项继续完成并通过解码。同名成品和源文件的内容通过读回校验。NVENC/QSV 本机实测通过，AMF 和 Media Foundation 的硬件路径受环境限制，CPU 回退通过。 [进程管理](frameflow/media.py#L179) · [成品发布](frameflow/media.py#L669) · [取消回归](tests/test_workflow.py#L244) · [原生窗口 G07、G11、G12](TEST_REPORT.md#L439)
+**验收。** 在 FFmpeg 实际运行时取消或关窗，确认子进程退出且目标目录无半成品。另测首项写入失败后，下一项继续完成并通过解码。同名成品和源文件的内容通过读回校验。NVENC/QSV 本机实测通过，AMF 和 Media Foundation 的硬件路径受环境限制，CPU 回退通过。 [进程管理](frameflow/media.py#L179) · [成品发布](frameflow/media.py#L669) · [取消回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L244) · [原生窗口 G07、G11、G12](TEST_REPORT.md#L439)
 
 ### 03｜GIF 发到聊天软件太大，保留两种质量档
 
@@ -32,7 +32,7 @@
 
 **实现与取舍。** AI 先降低帧率和尺寸，再用 `palettegen` 生成有限色数的调色板，最后用 `paletteuse` 编码。小体积档从 8 FPS、240×480 边界和 48 色起步，清晰档使用更高尺寸和帧率。设置目标体积后再试更小的尺寸、帧率和色数，保留最小有效结果。我接受小体积档的画质取舍，清晰档仍由用户主动选择。
 
-**验收。** 开发日志中，同一实际样片从约 **41.4 MiB 降到 1.5 MiB**，该素材未入库。可复跑测试用 FFprobe `-count_frames` 计算解码帧数，避开 GIF 百分之一秒帧延时对标称 FPS 的影响。后续 4 秒样片回读为小体积 240×136、32 帧，清晰档 480×270、48 帧。 [早期体积记录](SESSION_SUMMARY.md#L25) · [GIF 编码](frameflow/media.py#L784) · [预算回归](tests/test_workflow.py#L2058) · [媒体矩阵](TEST_REPORT.md#L384)
+**验收。** 开发日志中，同一实际样片从约 **41.4 MiB 降到 1.5 MiB**，该素材未入库。可复跑测试用 FFprobe `-count_frames` 计算解码帧数，避开 GIF 百分之一秒帧延时对标称 FPS 的影响。后续 4 秒样片回读为小体积 240×136、32 帧，清晰档 480×270、48 帧。 [早期体积记录](SESSION_SUMMARY.md#L25) · [GIF 编码](frameflow/media.py#L784) · [预算回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L2058) · [媒体矩阵](TEST_REPORT.md#L384)
 
 ### 04｜目标体积输入了，为什么导出大小没变
 
@@ -40,7 +40,7 @@
 
 **第一次实现与问题。** 编辑导出接入缩放和目标体积后，冒烟测试发现大小没有按目标变化。检查实际命令发现编码预设被拼了两遍，后面带 CRF 的默认参数干扰了按预算设置的 `-b:v`。
 
-**修正与验收。** `_with_bitrates()` 按选项和值构造参数，在预算编码时先移除冲突的质量和码率项，再加入明确的音视频码率。用目标字节数和时长估计预算，超限后做有限次重试，保留更小且可播放的成品。一次 6 秒样片目标 **400 KB**，实得 **319 KB**。独立缩放用例回读 **640×360**，后续批量入口还核对了 **30 FPS**。界面的预计体积用于比较设置，实际输出以落盘结果为准。 [重复参数排查](docs/session-2026-11-07.md#L132) · [码率参数构造](frameflow/media.py#L638) · [批量输出回读](tests/test_workflow.py#L273)
+**修正与验收。** `_with_bitrates()` 按选项和值构造参数，在预算编码时先移除冲突的质量和码率项，再加入明确的音视频码率。用目标字节数和时长估计预算，超限后做有限次重试，保留更小且可播放的成品。一次 6 秒样片目标 **400 KB**，实得 **319 KB**。独立缩放用例回读 **640×360**，后续批量入口还核对了 **30 FPS**。界面的预计体积用于比较设置，实际输出以落盘结果为准。 [重复参数排查](docs/session-2026-11-07.md#L132) · [码率参数构造](frameflow/media.py#L638) · [批量输出回读](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L273)
 
 ## 二、时间线、音频与异步编辑
 
@@ -50,7 +50,7 @@
 
 **实现与修正。** AI 用 FFprobe 的 `best_effort_timestamp_time` 建立帧索引，记录素材路径与源帧号。预览以 `frame_png()` 请求具体帧，可见缩略图按批加载。切帧从保存任务分离，等待解码时保留上一次画面。`_frame_ready()` 只显示与 `requested_frame` 匹配的结果，最近帧留在有限缓存中供回看。
 
-**验收。** 快速连续切帧时比对预览和时间线几何，核对最后显示的帧与最终请求一致。后续用 95 秒样片建立 **2,280 帧**索引，原生窗口成功定位到第 **2,276 帧**。 [帧索引与解码](frameflow/editing.py#L76) · [回调与缓存](frameflow/editor.py#L3297) · [快速切帧回归](tests/test_workflow.py#L997) · [原生窗口 G19](TEST_REPORT.md#L439)
+**验收。** 快速连续切帧时比对预览和时间线几何，核对最后显示的帧与最终请求一致。后续用 95 秒样片建立 **2,280 帧**索引，原生窗口成功定位到第 **2,276 帧**。 [帧索引与解码](frameflow/editing.py#L76) · [回调与缓存](frameflow/editor.py#L3297) · [快速切帧回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L997) · [原生窗口 G19](TEST_REPORT.md#L439)
 
 ### 06｜用具体帧号定义 Shift、Ctrl 和拖选
 
@@ -58,7 +58,7 @@
 
 **第一次实现与修正。** 第一版以一个固定锚点和当前点击组成区间，向左会得到第 10–20 帧。AI 改为比较点击位置和当前选区两端，点左边扩左端、点右边扩右端，点区间内保留两端。Ctrl 独立切换单帧，当前预览位置和选区分别记录，复制、剪切、删除按实际选中区间操作。
 
-**验收。** 在原生窗口和自动化中验证第 20–30 帧依次变成第 10–30、10–35 帧，检查区间内点击和 Ctrl 单帧取消。另实测把第 3–8 帧导出为带音轨的 **6 帧 MP4**。 [选择逻辑](frameflow/editor.py#L2849) · [Shift/Ctrl 用例](tests/test_workflow.py#L774) · [实拍与交互记录](SESSION_SUMMARY.md#L87)
+**验收。** 在原生窗口和自动化中验证第 20–30 帧依次变成第 10–30、10–35 帧，检查区间内点击和 Ctrl 单帧取消。另实测把第 3–8 帧导出为带音轨的 **6 帧 MP4**。 [选择逻辑](frameflow/editor.py#L2849) · [Shift/Ctrl 用例](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L774) · [实拍与交互记录](SESSION_SUMMARY.md#L87)
 
 ### 07｜从任一轨剪辑，另一轨都按同一时间边界处理
 
@@ -66,7 +66,7 @@
 
 **实现与取舍。** AI 用 `Clip` 保存路径、流索引与区间。视频轨按帧，音轨按秒。视频删帧先换算音轨区间，波形剪切则先对齐视频帧边界再剪两轨。音量和外部插入的音频仍属于当前片段序列。编辑期间只改片段引用，预览与导出从同一时间线构造 `trim`、`atrim` 和 `concat`。
 
-**验收。** 720×1616 实拍样片起初 169 帧，从波形删一段后剩 143 帧，再从视频删 5 帧，导出为 **138 帧、5.520 秒**，FFmpeg 完整解码两轨。自动化覆盖两种剪切方向和时长读回。 [片段模型](frameflow/editing.py#L19) · [视频侧剪切](frameflow/editor.py#L3560) · [音频侧剪切](frameflow/editor.py#L3909) · [双向回归](tests/test_workflow.py#L944)
+**验收。** 720×1616 实拍样片起初 169 帧，从波形删一段后剩 143 帧，再从视频删 5 帧，导出为 **138 帧、5.520 秒**，FFmpeg 完整解码两轨。自动化覆盖两种剪切方向和时长读回。 [片段模型](frameflow/editing.py#L19) · [视频侧剪切](frameflow/editor.py#L3560) · [音频侧剪切](frameflow/editor.py#L3909) · [双向回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L944)
 
 ### 08｜四段不连续选区卡住，用原始素材定位零采样边界
 
@@ -74,7 +74,7 @@
 
 **问题与修正。** 视频有 6.76 秒，音轨约 6.18 秒就结束，最后一段完全取不到音频采样。原来的补齐方式依赖截取后仍有数据。AI 在 `_graph()` 里按每段预期长度生成 `anullsrc`，以有限长度的静音为底轨，再用 `amix=duration=first:normalize=0` 混入实际音频。即使某段完全没有输入采样，时间线也有明确时长。
 
-**验收。** 回到同一实拍文件和原四段选区，共 **34 帧**，播放到第 169 帧。新增音轨短于视频的回归，核对选区播放、终点和进程清理。该阶段验证了时间线和预览音频链路，人耳判断声画同步留给人工测试。 [滤镜图](frameflow/editing.py#L165) · [音轨提前结束用例](tests/test_workflow.py#L918) · [实拍复现记录](SESSION_SUMMARY.md#L136)
+**验收。** 回到同一实拍文件和原四段选区，共 **34 帧**，播放到第 169 帧。新增音轨短于视频的回归，核对选区播放、终点和进程清理。该阶段验证了时间线和预览音频链路，人耳判断声画同步留给人工测试。 [滤镜图](frameflow/editing.py#L165) · [音轨提前结束用例](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L918) · [实拍复现记录](SESSION_SUMMARY.md#L136)
 
 ### 09｜允许从队列跨媒体拖入，读取中也能撤销
 
@@ -82,7 +82,7 @@
 
 **实现与修正。** 视频与图片按时间线边界插入，图片占一帧，不同尺寸按目标画布等比合成。音频和带声音的视频走音轨入口，以先前标记的时刻为准。AI 给异步插入保留独立任务引用。`undo()` 遇到尚未提交的插入就取消，完成回调检查取消状态后丢弃结果，前一次已经生效的编辑仍可保留。
 
-**验收。** 用 169 帧样片实测插图后为 170 帧，音频在约 **2.111 秒**的标线进入，无声视频也能在约 **1.220 秒**处插入声音。自动化覆盖源类型、插入边界、左栏焦点撤销和读取中撤销。 [拖入处理](frameflow/editor.py#L3637) · [撤销入口](frameflow/editor.py#L3973) · [跨媒体用例](tests/test_workflow.py#L1566) · [阶段记录](SESSION_SUMMARY.md#L170)
+**验收。** 用 169 帧样片实测插图后为 170 帧，音频在约 **2.111 秒**的标线进入，无声视频也能在约 **1.220 秒**处插入声音。自动化覆盖源类型、插入边界、左栏焦点撤销和读取中撤销。 [拖入处理](frameflow/editor.py#L3637) · [撤销入口](frameflow/editor.py#L3973) · [跨媒体用例](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L1566) · [阶段记录](SESSION_SUMMARY.md#L170)
 
 ### 10｜低音量要能看清，长音轨按窗口读取
 
@@ -90,7 +90,7 @@
 
 **实现与修正。** `audio_preview()` 从 FFmpeg 输出读取 PCM。概览按像素列提取峰值，放大到一定程度切到真实采样连线和点。显示增益单独计算。长音轨每次加载最多 30 秒，缓存最近两个区间，缓存键包括片段和源文件修改时间、大小。跳到窗口外再加载，源文件丢失有明确报错。
 
-**验收。** 用低音量与静音样片检查显示增益，比较实际 PCM 保持不变。35 秒 WAV 在原生窗口从 **0–30 秒**切到 **5–35 秒**，区间和采样跟着移动。另有实拍高倍缩放与缓存失效用例。 [PCM 和峰值](frameflow/editing.py#L260) · [波形窗口与缓存](frameflow/editor.py#L4006) · [低音量回归](tests/test_workflow.py#L1891) · [原生窗口 G09](TEST_REPORT.md#L439)
+**验收。** 用低音量与静音样片检查显示增益，比较实际 PCM 保持不变。35 秒 WAV 在原生窗口从 **0–30 秒**切到 **5–35 秒**，区间和采样跟着移动。另有实拍高倍缩放与缓存失效用例。 [PCM 和峰值](frameflow/editing.py#L260) · [波形窗口与缓存](frameflow/editor.py#L4006) · [低音量回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L1891) · [原生窗口 G09](TEST_REPORT.md#L439)
 
 ## 三、桌面状态与转场
 
@@ -100,7 +100,7 @@
 
 **实现与取舍。** AI 把每个文件的导出参数记在 `Job.export_settings`，按文件缓存 `Editor`，两页挂载同一个设置区。预设改分辨率、质量等字段，手改字段又要反映到预设选择。双向同步时用 `QSignalBlocker` 暂停程序写入产生的信号，避免重复触发或把手动参数改回默认值。
 
-**验收。** 设置首文件 MKV/HEVC、分辨率、30 FPS，进预览再改质量和目录，返回检查参数仍在。切到第二个文件核对默认值，切回后确认仍是同一个编辑器实例。 [按文件存储](frameflow/window.py#L2003) · [预设同步](frameflow/editor.py#L2402) · [两页参数回归](tests/test_workflow.py#L824)
+**验收。** 设置首文件 MKV/HEVC、分辨率、30 FPS，进预览再改质量和目录，返回检查参数仍在。切到第二个文件核对默认值，切回后确认仍是同一个编辑器实例。 [按文件存储](frameflow/window.py#L2003) · [预设同步](frameflow/editor.py#L2402) · [两页参数回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L824)
 
 ### 12｜用真实窗口尺寸找到布局根因
 
@@ -118,7 +118,7 @@
 
 **重新实施。** 后来我明确只改页面切换与必要容器，保留媒体处理、编辑器和输出功能，并要求在功能分支做回归。Codex 用 `PageTransition(QLayout)` 在同一个宿主布局里管理真实控件。一个 **360 ms** 的 `QVariantAnimation` 驱动队列宽度、旧设置可见范围和新工作区位置。播放器与右栏在同一个工作区内运动，旧右栏收进后移交共享设置。窗口尺寸变化时按当前进度重算几何，反向点击改变运行方向。两套队列沿同一边界交接，继续使用同一组任务。
 
-**验收。** 以 1510 逻辑像素宽窗口测进度 0%、25%、50%、75%、100%，活动队列宽分别为 **1089、969、851、579、279**，播放器和右栏在可见阶段的横向间距恒为 **791**。原生窗口采样 125% 与 Qt 等效 100%，保留中间帧截图。20 次快速点击后选中项、编辑器实例和最终页面一致。还测中途缩放、播放中反向、批量转换和编辑导出中切页。 [真实布局实现](frameflow/motion.py#L200) · [中间几何](tests/test_workflow.py#L2319) · [20 次快切](tests/test_workflow.py#L2388) · [原生证据与边界](TEST_REPORT.md#L351)
+**验收。** 以 1510 逻辑像素宽窗口测进度 0%、25%、50%、75%、100%，活动队列宽分别为 **1089、969、851、579、279**，播放器和右栏在可见阶段的横向间距恒为 **791**。原生窗口采样 125% 与 Qt 等效 100%，保留中间帧截图。20 次快速点击后选中项、编辑器实例和最终页面一致。还测中途缩放、播放中反向、批量转换和编辑导出中切页。 [真实布局实现](frameflow/motion.py#L200) · [中间几何](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L2319) · [20 次快切](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L2388) · [原生证据与边界](TEST_REPORT.md#L351)
 
 ### 14｜两种队列宽度，用同一种视觉和选中反馈
 
@@ -126,7 +126,7 @@
 
 **实现与取舍。** 宽队列仍用带行控件的 `Row`，窄队列用 `QueueDelegate` 保持紧凑展示。AI 统一行高、边距、缩略图与文件名处理、浅蓝选中底和左侧指示条，标题和底部清空使用一致的布局规则。我把修改范围锁在队列，转场容器已经通过验收，继续使用原来那套。
 
-**验收。** 混合素材逐项比对同一缩略图的像素、文件顺序和选中项，检查滚动和焦点。两页清空同高同边距，删除与清空保留磁盘文件。快切测试仍通过。 [宽窄队列实现](frameflow/window.py#L401) · [队列几何回归](tests/test_workflow.py#L2279) · [原生窗口 G02](TEST_REPORT.md#L439)
+**验收。** 混合素材逐项比对同一缩略图的像素、文件顺序和选中项，检查滚动和焦点。两页清空同高同边距，删除与清空保留磁盘文件。快切测试仍通过。 [宽窄队列实现](frameflow/window.py#L401) · [队列几何回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L2279) · [原生窗口 G02](TEST_REPORT.md#L439)
 
 ## 四、我如何复查 AI 的测试与交付
 
@@ -146,7 +146,7 @@
 
 **FF-02。** 转换页和预览页输入自定义名，目录选对了，成品却分别用了源名和源名加「_编辑」。输入已进入 `Job.output_stem`，两条后台路径都未传给最终发布函数。AI 将名称加入 `Export` 快照，复用文件名校验和 `_publish()` 的扩展名、递增序号与源文件保护。预览页图片导出也通过原有图片保存入口使用同一名称。
 
-**验收。** 转换生成 `转换 Export (校对) (1).mp4`，预览生成 `剪辑 Preview (最终).mp4`，图片同名产生 `(1).png`。非法斜线和 `CON` 都被拒绝。四个新增用例走实际菜单、输入框和导出按钮。提交 **`c23c792`** 的离屏和 Windows 原生测试各 **44/44** 通过。 [批量格式](frameflow/window.py#L1378) · [导出参数](frameflow/window.py#L2377) · [新回归](tests/test_workflow.py#L357) · [复测记录](TEST_REPORT.md#L547)
+**验收。** 转换生成 `转换 Export (校对) (1).mp4`，预览生成 `剪辑 Preview (最终).mp4`，图片同名产生 `(1).png`。非法斜线和 `CON` 都被拒绝。四个新增用例走实际菜单、输入框和导出按钮。提交 **`c23c792`** 的离屏和 Windows 原生测试各 **44/44** 通过。 [批量格式](frameflow/window.py#L1378) · [导出参数](frameflow/window.py#L2377) · [新回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L357) · [复测记录](TEST_REPORT.md#L547)
 
 ### 17｜从源码能运行，到两种 Windows 发行包都能验收
 
@@ -206,7 +206,7 @@
 
 **实现与取舍。** `efa18b3` 把跨入视频时间轴的拖拽图缩为 96×32，放在指针右下方。长名省略，停留后由 Tooltip 显示全名。预览空位只让出一个缩略图宽度。蓝线根据鼠标、可见帧几何、横向偏移和缩放得出边界，松手才提交实际媒体。合成图片仍占一帧，视频按读取到的逐帧索引插入。
 
-**验收。** 同轮系统鼠标用短名 JPG、长名 PNG 和视频比较占位，实际插入后检查源帧和轨道长度，再撤销。此前 384 帧样片曾确认占位和真实帧数可以独立处理。 [紧凑拖拽图](frameflow/window.py#L644) · [命中边界](frameflow/filmstrip.py#L278) · [插入回归](tests/test_workflow.py#L1439)
+**验收。** 同轮系统鼠标用短名 JPG、长名 PNG 和视频比较占位，实际插入后检查源帧和轨道长度，再撤销。此前 384 帧样片曾确认占位和真实帧数可以独立处理。 [紧凑拖拽图](frameflow/window.py#L644) · [命中边界](frameflow/filmstrip.py#L278) · [插入回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L1439)
 
 ### 24｜Windows 拖放中的滚轮走窗口线程，滚动后重算蓝线
 
@@ -214,7 +214,7 @@
 
 **问题定位与实现。** 实测 Windows OLE 拖放期间，窗口线程仍收到滚轮消息，普通 Qt 控件事件没有到时间轴。`167d049` 在外部素材有效悬停时临时监听 FrameFlow 的 GUI 线程，原始消息继续交给系统，滚动由 Qt 定时回调处理。靠边约 42 个逻辑像素时可持续自动滚动。两条路径都写入同一个水平滚动条，由 `valueChanged` 重算边界、指示线和弹簧目标。退出拖放立即释放监听。
 
-**验收。** Windows 系统鼠标保持左键按下，分别拖视频和图片滚动、左右靠边和 Esc。检查静止指针下偏移及插入帧号随滚动变化，再回读真实插入位置。普通播放与 Ctrl＋滚轮缩放另行复测。 [Windows 线程消息读取](frameflow/drag_wheel.py#L25) · [边缘自动滚动](frameflow/filmstrip.py#L404) · [滚动到插入回归](tests/test_workflow.py#L1493)
+**验收。** Windows 系统鼠标保持左键按下，分别拖视频和图片滚动、左右靠边和 Esc。检查静止指针下偏移及插入帧号随滚动变化，再回读真实插入位置。普通播放与 Ctrl＋滚轮缩放另行复测。 [Windows 线程消息读取](frameflow/drag_wheel.py#L25) · [边缘自动滚动](frameflow/filmstrip.py#L404) · [滚动到插入回归](https://github.com/yuganwinfurt-bot/FrameFlow/blob/a6ed7a1e1373e2802fe24b026a77ef21db7c432d/tests/test_workflow.py#L1493)
 
 ### 25｜滚轮按控件职责分流，三个常用滑块单独开放
 

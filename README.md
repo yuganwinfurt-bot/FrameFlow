@@ -86,19 +86,20 @@ AI Agent 聊天气泡按实际文本排版计算尺寸。短消息保持单行�
 | 模块 | 职责 |
 | --- | --- |
 | [启动入口](run.pyw) | 创建 Qt 应用，定位随包的媒体工具，启动主窗口 |
-| [窗口与队列](frameflow/window.py) | Qt 主线程更新界面，后台线程探测媒体和处理批量任务。每个素材保存独立的导出参数 |
-| [媒体处理](frameflow/media.py) | FFprobe 读取元数据，FFmpeg 生成缩略图、转码并回传进度。`Processes` 管理子进程取消，成品从临时文件发布 |
-| [编辑与播放](frameflow/editor.py) · [片段渲染](frameflow/editing.py) · [播放调度](frameflow/playback.py) | 逐帧预览按需解码。剪切与粘贴更新片段引用，预览和导出按同一时间线渲染 |
+| [主窗口](frameflow/window.py) · [队列状态](frameflow/queue_state.py) · [队列视图](frameflow/queue_view.py) | 主窗口绑定导航和信号。宽窄队列共享媒体记录和顺序，每个素材保存独立导出参数 |
+| [媒体处理](frameflow/media.py) · [子进程管理](frameflow/media_runtime.py) · [后台批量任务](frameflow/conversion_batch.py) | FFprobe 探测，FFmpeg 生成缩略图和转码。工作线程回传进度与结果，子进程作用域负责取消和回收 |
+| [编辑与播放](frameflow/editor.py) · [片段渲染](frameflow/editing.py) · [播放调度](frameflow/playback.py) | 逐帧预览按需解码。剪切与粘贴更新片段引用，预览与导出按同一时间线渲染。[体积估算](frameflow/estimates.py) 接收显式时长和参数 |
 | [Agent 会话](frameflow/agent.py) · [模型连接](frameflow/agent_api.py) | Qt 通过异步网络请求收发 Chat Completions 消息和工具调用。Windows 使用当前用户的 DPAPI 保存凭据 |
-| [工具与确认](frameflow/agent_tools.py) | 根据队列 ID 和目录权限校验工具参数。用户确认计划后，将任务参数快照提交给原有 FFmpeg 转换队列 |
-| [工作流测试](tests/test_workflow.py) | 覆盖真实导出、参数隔离、异步定位、音视频联动、取消与同名保护 |
+| [工具与确认](frameflow/agent_tools.py) · [宿主接口](frameflow/agent_host.py) | 根据队列 ID 和目录权限校验工具参数。用户确认计划后，将任务参数快照提交给原有 FFmpeg 转换队列 |
+| [回归测试](tests/) | 按媒体转换、队列与转场、编辑与播放、Agent 与安全边界组织。使用真实 FFprobe 回读成品 |
 
 一个实际问题是，实拍视频有 **6.76 秒**，音轨约 **6.18 秒**就结束，选择多段帧时预览会卡在准备阶段。修复后，渲染按每段时长建立静音底轨，再叠加实际音频。用原来的四段选区复测，共 **34 帧**，成功播放到最后一帧。 [复现与回归记录](SESSION_SUMMARY.md) · [音轨渲染代码](frameflow/editing.py)
 
 ## 我怎样用 AI 开发和验收
 
-我确定客户端选型，用截图和实际操作给 AI 划定修改范围，再根据运行结果决定接受、继续修改或停止。比如，我要求同一文件设为 **H.265、720P、CRF 23** 后，切换转换页和预览页仍保留参数。实现复用了导出参数模型，回归用例同时检查了两页同步和不同文件之间的参数隔离。 [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [参数回归用例](tests/test_workflow.py#L824)
+我确定客户端选型，用截图和实际操作给 AI 划定修改范围，再根据运行结果决定接受、继续修改或停止。比如，我要求同一文件设为 **H.265、720P、CRF 23** 后，切换转换页和预览页仍保留参数。实现复用了导出参数模型，回归用例同时检查了两页同步和不同文件之间的参数隔离。 [AI 开发会话总结](FrameFlow_开发会话总结_2026-11-08.md) · [参数回归用例](tests/test_desktop_queue.py#L200)
 
+- [工程化重构报告](REFACTORING_REPORT.md)｜代码审计、职责边界、测试设计与回归证据。
 - [功能演进记录](SESSION_SUMMARY.md)｜需求变更、技术方案与阶段验证。
 - [界面改版记录](docs/session-2026-11-07.md)｜参考图、用户反馈、界面取舍与回归。
 - v1.1.0 的便携、安装、覆盖升级和卸载验收，以及后续 Agent 开发分支的 124 项通过记录均有保留。 [历史测试报告](TEST_REPORT.md)

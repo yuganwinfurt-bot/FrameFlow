@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .media import AudioInfo, ImageInfo, MediaInfo, VideoInfo, detail_rows
+from .media_text import detailed_size as _size
 from .motion import Button, hide_vertical_scroll_bar
 from .theme import C
 
@@ -37,19 +38,6 @@ def _clock(seconds: float) -> str:
     hours, rest = divmod(total, 3600)
     minutes, secs = divmod(rest, 60)
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
-
-
-def _size(size: int) -> str:
-    """和队列里的 file_size() 用同一套十进制单位，避免同一个文件显示两个数。"""
-    if not size:
-        return "—"
-    if size >= 1_000_000_000:
-        return f"{size / 1_000_000_000:.2f} GB"
-    if size >= 1_000_000:
-        return f"{size / 1_000_000:.2f} MB"
-    if size >= 1_000:
-        return f"{size / 1_000:.1f} KB"
-    return f"{size} B"
 
 
 def _summary(path: Path, info: MediaInfo) -> str:

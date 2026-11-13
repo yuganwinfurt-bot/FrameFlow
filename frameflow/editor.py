@@ -29,6 +29,7 @@ from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabe
 from .filmstrip import Filmstrip
 from . import icons
 from .media import output_extension
+from .media_text import detailed_size as _size_text
 from .estimates import estimate_audio, estimate_video
 from .media import (AUDIO_EXTENSIONS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
                     AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
@@ -177,18 +178,6 @@ def _rate_text(bits):
     return f"{bits / 1_000:.0f} kbps"
 
 
-def _size_text(size):
-    if not size:
-        return "—"
-    if size >= 1_000_000_000:
-        return f"{size / 1_000_000_000:.2f} GB"
-    if size >= 1_000_000:
-        return f"{size / 1_000_000:.2f} MB"
-    if size >= 1_000:
-        return f"{size / 1_000:.1f} KB"
-    return f"{size} B"
-
-
 def _spin(*, seconds=False):
     field = QDoubleSpinBox() if seconds else SpinBox()
     if seconds:
@@ -196,23 +185,6 @@ def _spin(*, seconds=False):
         field.setSingleStep(.1)
         field.setSuffix(" 秒")
     return field
-
-
-def _field(title: str, widget: QWidget) -> QWidget:
-    """给单元格加一行小标题，比一列「标签 + 控件」更紧凑，也便于两列排布。"""
-    holder = QWidget()
-    holder.setObjectName("fieldCell")
-    layout = QVBoxLayout(holder)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(3)
-    if title:
-        label = QLabel(title)
-        label.setObjectName("fieldLabel")
-        layout.addWidget(label)
-    layout.addWidget(widget)
-    holder.field_label = label if title else None
-    holder.field_control = widget
-    return holder
 
 
 class _ExportCells:
@@ -1151,7 +1123,6 @@ class Editor(QDialog):
         cells[self.quality] = self.quality_card
         cells[self.output_fps] = self.fps_row
         cells[self.acceleration] = self.acceleration_row
-        self.export_grid = None
         self.export_fields = _ExportCells(cells)
         self.format.currentIndexChanged.connect(self._refresh_acceleration)
         self.format.currentIndexChanged.connect(self._refresh_audio_codec)
@@ -1802,10 +1773,6 @@ class Editor(QDialog):
         self._refresh_acceleration()
         self._update_output_location()
         self.task_changed.emit()
-
-    def _show_picture_page(self):
-        if self.image_page is not None:
-            self.tabs.setCurrentWidget(self.image_page)
 
     def mount_settings(self, layout=None):
         if layout is None and not self.configuration_only:

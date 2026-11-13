@@ -28,6 +28,19 @@ def file_size(size: int) -> str:
     return f"{size / 1_000_000:.2f} MB" if size >= 1_000_000 else f"{size / 1_000:.1f} KB"
 
 
+def detailed_size(size: int | float) -> str:
+    """Use decimal units with byte and gigabyte bounds for the details and estimates."""
+    if not size:
+        return "—"
+    if size >= 1_000_000_000:
+        return f"{size / 1_000_000_000:.2f} GB"
+    if size >= 1_000_000:
+        return f"{size / 1_000_000:.2f} MB"
+    if size >= 1_000:
+        return f"{size / 1_000:.1f} KB"
+    return f"{size} B"
+
+
 def clock(seconds: float) -> str:
     """表格里的时长列：统一成 00:00 形式，未知就给一个占位符。"""
     if not seconds or seconds <= 0:
