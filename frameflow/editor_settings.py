@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QFileDialog, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QPushButton, QTabBar, QVBoxLayout, QWidget)
 

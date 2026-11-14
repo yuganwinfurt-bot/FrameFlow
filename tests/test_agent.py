@@ -50,6 +50,7 @@ class AgentToolsWorkflowTest(AgentWorkspaceFixture):
             tail = body["messages"][-1]
             if tail["role"] == "user":
                 return 200, response(None, call("list_media", call_id="list"),
+                                     call("get_current_selection", call_id="current"),
                                      call("get_media_info", {"id": key}, "info"))
             if tail["tool_call_id"] == "info":
                 return 200, response(None,
@@ -63,7 +64,8 @@ class AgentToolsWorkflowTest(AgentWorkspaceFixture):
                 return 200, response(None, call("prepare_conversion", {"ids": [key]}, "prepare"))
             if tail["tool_call_id"] == "prepare":
                 plan_id = json.loads(tail["content"])["result"]["plan_id"]
-                return 200, response(None, call("start_conversion", {"plan_id": plan_id}, "start"))
+                return 200, response(None, call("get_task_status", {"task_id": plan_id}, "status"),
+                                     call("start_conversion", {"plan_id": plan_id}, "start"))
             return 200, response("已生成 **MP4 / H.265** 计划，请确认。")
 
         with mock_model(model) as (config, requests):
@@ -77,6 +79,10 @@ class AgentToolsWorkflowTest(AgentWorkspaceFixture):
             self.assertEqual(len(packets), 6)
             sent = json.loads(packets[1]["messages"][-1]["content"])
             self.assertEqual(sent["attachments"], [{"id": key, "name": self.first.name}])
+            tool_results = {message["tool_call_id"]: json.loads(message["content"])
+                            for message in packets[-1]["messages"] if message["role"] == "tool"}
+            self.assertEqual(tool_results["current"]["result"]["id"], key)
+            self.assertEqual(tool_results["status"]["result"]["status"], "awaiting_confirmation")
             self.assertNotIn(str(self.root), str(packets))
             self.assertIn("HEVC", str(packets[-1]).upper())
             result = json.loads(packets[-1]["messages"][-1]["content"])
@@ -152,7 +158,9 @@ class AgentToolsWorkflowTest(AgentWorkspaceFixture):
         self.nav(1)
         self.nav(0)
         self.nav(2)
-        self.assertEqual(agent.cancel_conversion(cancelled.id)["status"], "cancelling")
+        result = agent.dispatch("cancel_conversion", json.dumps({"task_id": cancelled.id}))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["result"]["status"], "cancelling")
         self.wait(lambda: agent.active is None)
         self.assertEqual(agent.get_task_status(cancelled.id)["status"], "cancelled")
         self.assertFalse(list(self.root.glob(".frameflow-*")))

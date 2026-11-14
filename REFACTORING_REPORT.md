@@ -173,3 +173,104 @@ Windows 11 构建 26200、125% 缩放（Qt DPR 1.25）、Python 3.13.0、PySide6
 - Editor 仍持有播放器、挂载的输出设置、撤销与异步任务的相互关联状态，`_build_output_settings` 还有 376 行。进一步拆分应先确定编辑会话的所有权及回调生命周期，并增加挂载、异步取消和恢复的特征测试。
 - 主窗口的 `_refresh_controls` 仍集中决定多个工作区的可操作状态，分支指标为 47。Qt 控件和可变 Job 状态仍通过窗口编排，`AgentHost` 也继续返回 Job 对象。未来可以在明确快照和状态同步语义后进一步收窄。
 - 普通转码与编辑渲染各有尺寸预算和回退策略，暂保留现有参数语义。部分测试仍以几何或内部状态观察行为，涉及窗口裁切、真实端点和播放状态时，这些断言提供了外部成品无法表达的证据。测试依赖部分已弃用的 Qt 事件构造器。
+
+## 第二轮深度重构
+
+本轮从第一轮完成时的 refactor/engineering 提交 36d9e31 开始。原桌面仓库仍在 master 的 a6ed7a1。开发者指出上一轮缩小了文件，但 Editor 仍约 3400 行，跨工作区刷新集中，测试文件仍接近 900 行。开发者明确要求按实际职责拆分，保护既有界面、动画和人工确认机制，并在独立分支分阶段验证。本节中的组件划分和实现取舍由 AI 提出并实施。
+
+### 从实际调用关系确定边界
+
+- **编辑器。** 原来的 Editor 同时持有视频与音频时钟、波形和暂停帧缓存、图片估算请求、轨道片段、选区、剪贴板、撤销和 worker 回调。切页会停止播放、取消部分预览、重新挂载参数并刷新底栏。每种工作有不同取消时机，因而按任务的生命周期划分。
+- **音视频编辑。** 音轨由源视频推导与显式空轨有不同含义，切剪、移动和撤销需要同时处理音视频。播放选区与另存选区需要共用同一段轨道计算。帧选区使用一基闭区间，独立于片段和撤销。
+- **工作区状态。** 两套队列视图引用同一份 Job。选中文件的参数界面会在转换和预览之间重新挂载，单项 Export 由 Job 持有。批量默认参数与运行中进度分别有自己的生存周期。Agent 通过 AgentHost 读写队列与参数并申请任务，入口仍保留人工确认、路径授权及计划校验。
+- **主窗口。** 原来一次 _refresh_controls 会更新两个列表、右侧摘要、批量对话框、硬件选项和转换按钮。预览底栏还直接读取编辑器页签、进度条、提示和取消按钮。拆分后每个组件渲染自己负责的状态。
+
+```text
+重构前
+MainWindow → 多工作区刷新 · 批量参数 · 转换进度 · 直接读取编辑器控件
+           → Editor → 片段 · 选区 · 播放 · 波形 · 导出设置 · 多个后台任务
+
+重构后
+MainWindow → QueueState / QueueAvailability → 队列行、侧栏、批量设置
+           → ConversionRun → conversion_batch → media → media_runtime
+           → AgentHost → 既有队列、单项 Export 和批量任务入口
+           → Editor → EditSession / FrameSelection
+                    → VideoTransport → playback
+                    → AudioWorkspace → WaveView / editing
+                    → ExportSettings → estimates
+                    → FramePreview / PictureEstimate → editing / media
+                    → EditorExport → EditorTasks → 既有导出接口
+PreviewFooter ← Editor.export_status() 返回的 PreviewStatus 快照
+```
+
+### 模块接管的职责
+
+| 组件 | 实际接管 | 取舍 |
+| --- | --- | --- |
+| [EditSession](frameflow/edit_session.py) | 音视频片段、源索引、插入静帧缓存、联动剪贴板与双轨撤销。统一播放和另存所用轨道 | 可脱离 Qt 验证。Editor 保留画面、波形和提示的协调 |
+| [FrameSelection](frameflow/frame_selection.py) | 连续选区、离散帧覆盖、Ctrl 拖拽快照与归并 | Filmstrip 负责鼠标输入和渲染。Editor 同步帧号及光标 |
+| [VideoTransport](frameflow/video_transport.py) | 播放会话、时钟、音量与全屏 QWidget 的挂载 | 共享 EditSession 的轨道。Editor 协调视频、音轨试听与帧预览互斥 |
+| [AudioWorkspace](frameflow/audio_workspace.py) | 波形区间和缓存、缩放、音频选择、播放头、试听时钟及右键菜单 | 编辑操作走明确的回调。音轨仍由 EditSession 持有，波形和试听沿用前台任务 |
+| [FramePreview / PictureEstimate](frameflow/preview_requests.py) | 暂停帧的单在途解码、缓存和过期校验，以及图片体积估算的独立请求代次和取消 | 按各自的生命周期清理。页签与参数通过输入和回调提供 |
+| [ExportSettings](frameflow/editor_settings.py)、[editor_controls](frameflow/editor_controls.py) | 可重挂载的设置 QWidget、模式、预设、格式选项、估算显示、目录和文件名，共用小型控件工厂 | 保留同一个控件实例和 Job 参数快照。模式变化经由信号同步 |
+| [EditorExport](frameflow/editor_export.py)、[EditorTasks](frameflow/editor_tasks.py) | 选择导出参数与目标。任务组件持有单线程池、取消作用域及完成回调 | 完成时先清除作用域再通知 UI。允许回调启动下一项，丢弃已取消的插入结果 |
+| [BatchSettings](frameflow/batch_settings.py)、[ConversionInspector](frameflow/conversion_inspector.py) | 批量默认值、格式能力、加速交集、文件名和目录。侧栏持有选中文件摘要和按钮 | 保留批量默认值和单项参数的优先级，侧栏提供设置挂载位置 |
+| [ConversionRun](frameflow/conversion_run.py)、[QueueState](frameflow/queue_state.py) | 批量运行生命周期、取消与结果计数。QueueState 保持成员和顺序并生成可操作性快照 | 手动和 Agent 仍共用同一批量执行入口。主窗口保留导航和提示 |
+| [PreviewFooter](frameflow/preview_footer.py) | 根据 PreviewStatus 刷新进度、按钮及提示 | MainWindow 经 Editor 的导出和取消入口协调 |
+
+考虑过继续拆大函数、使用转发混入类，以及给三页统一一个全局状态对象。实际采用组合与窄回调，因为队列成员、单项参数、运行中批次、暂态选区和剪辑结果的写入时机不同。代价是初始化多出组件连接。对比确认 11 个基线模块的 Git 内容相同，包括 Agent 请求、宿主协议和工具、FFmpeg 核心、播放解码、编辑渲染和原生转场。
+
+### 规模与复杂度
+
+沿用第一轮 AST 和物理行统计。函数分支指标包含条件、循环、异常、推导式和布尔分支。重复量按相同的 50-token 滑窗计算，只识别长段逐字重复。
+
+| 维度 | 第二轮前 | 第二轮后 |
+| --- | ---: | ---: |
+| Python 文件（.py） | 49 | 67 |
+| 应用 / 测试 .py 文件 | 31 / 17 | 44 / 22 |
+| Editor 类 | 3400 行 | 1161 行 |
+| MainWindow 类 | 1718 行 | 1273 行 |
+| 超过 1500 行的生产类 | 2 | 0 |
+| 最大应用模块 | editor.py，3610 行 | window.py，1392 行 |
+| 最长生产函数 | Editor._build_output_settings，376 行 | AgentPage.__init__，164 行 |
+| MainWindow._refresh_controls | 79 行，分支指标 47 | 12 行，分支指标 7 |
+| 最大生产函数分支指标 | 47 | 47，media.convert |
+| 最大测试文件 | test_agent.py，857 行 | test_desktop_queue.py，635 行 |
+| 静态导入环 | 0 | 0 |
+| 完全重复的 50-token 滑窗（全仓 / 应用） | 21 / 0 | 20 / 0 |
+
+### 验证
+
+Windows 11 构建 26200，Python 3.13.0，PySide6 6.12.0。使用 Windows Qt 插件、系统缩放 125%、真实 FFmpeg / FFprobe 和合成媒体。基线 89/89，122.828 秒。最终保留原有 89 个测试方法，另外增加两个领域边界用例，强化五文件批量和 Agent 工具分派两项覆盖。
+
+最终 Windows 全量 **91 通过，0 失败，0 跳过**，耗时 113.948 秒。此前同一批生产代码也完成一轮 91/91（115.419 秒），随后补齐 Agent 分派断言并重跑。
+
+| 层级 | 实测与判定 | 局限 |
+| --- | --- | --- |
+| 编辑状态 | 离散帧重排后逐帧核对顺序，短音轨补静音，撤销恢复两轨。Ctrl 拖拽改向时使用起始选区快照并保留未改帧，反向区间清空结果 | 纯状态用例之外，由原生 Qt 测试左右键、Shift 和跨媒体拖入 |
+| 真实媒体 | 点击批量菜单，三个视频实际导出 MKV/H.264，FFprobe 回读 320×180 与时长。音频实际解码、回读时长。PNG 用 Pillow 核对 40×30、alpha=96。五份源文件字节一致 | 合成素材和当前 FFmpeg 构建，媒体变体和设备的覆盖有限 |
+| 编辑、播放、估算 | 快速逐帧定位、暂停、全屏、音量、双轨编辑与撤销、单帧保存、波形缺失恢复、取消异步插入。预览导出和跨页批处理用实际输出及进度断言 | 部分设备行为由 winsound 的测试替身观察 |
+| 原生窗口及 DPI | 同一进程使用实际 Win32 标题栏点击执行 20 次还原和最大化，另做最小化、恢复、选 MP3、选择 MKV、删除队列项。系统 125% 和 Qt 有效 DPR 1.0 各一轮。每轮 42 个端点、209 次行几何检查，均无裁切。自动化另覆盖 20 次快速切页 | DPR 1.0 来自应用级缩放。未测系统 DPI 切换和跨显示器。截图及 geometry.jsonl 在本地工作目录 |
+| Agent | 13 个工具定义保持一致。以本机 HTTP 模型响应和工具分派测试读队列、选择、配置、计划状态、人工确认、非法参数和路径、过期计划、重复调用与取消。确认后实际导出 MP4/HEVC 160×90 | 未访问云端模型或使用真实密钥 |
+| 异常及资源 | 损坏媒体、取消、成品同名、退出清理及随包工具查找均执行 | 拒写和编码器回退使用故障注入，未实测 Windows ACL 或实际 GPU 编码及冻结版 |
+
+实施时有几个失败帮助检验切分边界。选区另存仍调用拆分前的函数，实际导出测试触发错误，随后统一使用 EditSession.tracks_for_selection。首轮全量测试出现两个测试夹具缺失问题，补齐共享拖放和样本函数后重跑。其他测试中的旧控件归属与导入路径也改为实际组件，保留原有行为断言。标题栏脚本首次传入相对路径，选择 MP3 后拿实际绝对路径比较导致断言超时。改用绝对素材路径后两种缩放均完整通过。
+
+### Git 与长期规范
+
+| 提交 | 检查点 |
+| --- | --- |
+| 48815cd、d980317 | 导出设置、音视频编辑状态 |
+| b4d3a42、22446eb | 视频播放、帧预览和图片估算 |
+| cca827e、648dae3 | 转换侧栏与批量设置、音频工作区 |
+| a1fa0c2、a7767b6 | 编辑导出和任务、预览底栏、批量运行状态 |
+| d13535e、3c81fbb | 测试重组和真实五文件验证、独立时间轴选区 |
+| 本报告所在提交 | Agent 工具分派复验、Skill 与验收依据 |
+
+[frameflow-engineering](.agents/skills/frameflow-engineering/SKILL.md) 通过格式校验。新开的临时 Codex 会话通过 skills/list 查到仓库内启用的 Skill，显式调用完成，并返回职责归属和全量回归规则。根目录 [AGENTS.md](AGENTS.md) 指定在开发、修复、UI、Agent 工具、测试和架构调整时使用。本轮实际应用了状态归属、异步取消、真实媒体回读、阶段测试及复杂度检查。
+
+### 剩余技术债
+
+- MainWindow 仍为 1273 行，承担导航、双队列同步、导入、文件操作及 AgentHost 编排。AgentHost 仍返回可变 Job。继续收窄时需要先定义 Job 快照和更新规则，再验证选中、排序、导入及 Agent 并发。
+- ExportSettings 的表单仍有约 1100 行，负责同一个可重挂载组件的模式、格式、预设、参数和估算。进一步拆开参数模型需要保护双向信号和预设恢复时序。AudioWorkspace 约 560 行，波形控件、定位和试听共用一个播放位置及波形区间。
+- AgentPage.__init__ 和 ModelDialog.__init__ 分别有 164、150 行，主要是界面装配。media.convert 仍有 137 行和分支指标 47，保留其体积预算、回退和发布语义。一些 Qt 事件测试仍使用已弃用的构造器。
