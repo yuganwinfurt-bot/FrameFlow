@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from .agent import AgentSession
-from .conversion_batch import BatchTask, inspect_media, run_batch
+from .conversion_batch import BatchTask, inspect_media
+from .conversion_run import ConversionRun
 from .batch_settings import AUDIO_FORMATS, IMAGE_FORMATS, VIDEO_FORMATS, BatchSettings, formats_for
 from .conversion_inspector import ConversionInspector, icon_label
 from .agent_tools import AgentTools
@@ -130,12 +131,10 @@ class MainWindow(QMainWindow):
         self.editors: dict[str, Editor] = {}
         self.mounted_editor: Editor | None = None
         self.details_dialog: DetailsDialog | None = None
-        self.scope: Processes | None = None
-        self.batch_keys = ()
         self.inspections = Processes()
         self.reader_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="frameflow-read")
-        self.export_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-export")
         self.events = Events(self)
+        self.batch = ConversionRun(self.jobs, tools, self.events)
         self.events.inspected.connect(self._inspected)
         self.events.thumb_ready.connect(self._show_thumbnail)
         self.events.phase.connect(self._phase)
@@ -1263,7 +1262,7 @@ class MainWindow(QMainWindow):
     def agent_batch_status(self) -> tuple[int, tuple[Job, ...]] | None:
         if self.scope is None:
             return None
-        return self.progress.value(), tuple(self.jobs[key] for key in self.batch_keys)
+        return self.progress.value(), self.batch.active_jobs()
 
     def agent_apply_export_options(self, job: Job, options: Export) -> None:
         job.export_settings = options
@@ -1319,73 +1318,53 @@ class MainWindow(QMainWindow):
     def _start_batch(self, tasks) -> bool:
         if not tasks or self.closing or self.tools is None or self.scope is not None:
             return False
-        self.scope = Processes()
-        self.batch_keys = tuple(key for key, _, _, _ in tasks)
-        self.pending_outputs = []
-        self.total, self.finished, self.failed = len(tasks), 0, 0
-        for key, _, _, _ in tasks:
-            job = self.jobs[key]
-            job.state, job.percent, job.detail = "等待转换", 0, ""
-            job.output, job.output_info, job.output_note = None, None, ""
-            self.rows[key].update_job(job)
+        self.batch.begin(tasks)
+        for key in self.batch.keys:
+            self.rows[key].update_job(self.jobs[key])
         self._show_selected()
         self.progress.setValue(0)
-        self.status.setText(f"正在转换 {self.total} 个文件…")
+        self.status.setText(f"正在转换 {len(tasks)} 个文件…")
         self._refresh_controls()
-        self.export_pool.submit(
-            run_batch, tasks, self.tools, self.scope,
-            phase=self.events.phase.emit, progress=self.events.progress.emit,
-            exported=self.events.exported.emit, completed=self.events.completed.emit,
-        )
+        self.batch.submit(tasks)
         return True
+
+    @property
+    def scope(self):
+        return self.batch.scope
 
     @Slot(str, str)
     def _phase(self, key: str, state: str) -> None:
-        if job := self.jobs.get(key):
-            job.state = state
+        if job := self.batch.set_phase(key, state):
             self.rows[key].update_job(job)
 
     @Slot(str, int)
     def _progress(self, key: str, percent: int) -> None:
-        if job := self.jobs.get(key):
-            job.percent = max(job.percent, percent)
+        if changed := self.batch.set_progress(key, percent):
+            job, overall = changed
             self.rows[key].update_job(job)
-            self.progress.setValue(round((self.finished * 100 + job.percent) / self.total))
+            self.progress.setValue(overall)
 
     @Slot(str, object, object, str, str)
     def _exported(self, key: str, output: Path | None, output_info: MediaInfo | None,
                   note: str, error: str) -> None:
-        job = self.jobs[key]
-        job.detail = error
-        job.state = "已完成" if output else "转换失败"
-        job.output, job.output_info, job.output_note = output, output_info, note
-        if output:
-            # 保留上一轮成品信息，但让这一行重新参与下一轮转换，方便换格式再导一次。
-            job.queued = True
-        if output:
-            self.pending_outputs.append(output)
-        self.finished += 1
-        self.failed += int(not output)
-        self.progress.setValue(round(self.finished * 100 / self.total))
+        job, overall = self.batch.record_result(key, output, output_info, note, error)
+        self.progress.setValue(overall)
         self._update_job(job)
 
     @Slot(bool)
     def _completed(self, cancelled: bool) -> None:
-        self.scope = None
-        for job in self.jobs.values():
-            if job.state in {"等待转换", "转换中"}:
-                job.state = "已取消" if cancelled else "未完成"
-                self.rows[job.key].update_job(job)
-        complete = self.finished - self.failed
-        if self.pending_outputs:
-            self.add_paths(self.pending_outputs, generated=True)
-        self.status.setText(f"{'已取消 · ' if cancelled else ''}完成 {complete} 个，失败 {self.failed} 个。")
+        changed, outputs, completed, failed = self.batch.finish(cancelled)
+        for job in changed:
+            self.rows[job.key].update_job(job)
+        if outputs:
+            self.add_paths(outputs, generated=True)
+        self.status.setText(f"{'已取消 · ' if cancelled else ''}完成 {completed} 个，失败 {failed} 个。")
         self._refresh_controls()
         self._prune_missing()
 
     def cancel_export(self) -> None:
         if self.scope is not None:
-            self.scope.cancel()
+            self.batch.cancel()
             self.status.setText("正在停止，已完成的文件会保留。")
             self._install_queue_menus()
         self._refresh_controls()
@@ -1401,8 +1380,7 @@ class MainWindow(QMainWindow):
         for animation in self.findChildren(Motion):
             animation.stop()
         self.inspections.cancel()
-        if self.scope is not None:
-            self.scope.cancel()
+        self.batch.cancel()
         self.reader_pool.shutdown(wait=True, cancel_futures=True)
-        self.export_pool.shutdown(wait=True, cancel_futures=True)
+        self.batch.shutdown()
         super().closeEvent(event)
