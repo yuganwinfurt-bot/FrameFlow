@@ -88,7 +88,7 @@ class EditorPlaybackTest(WorkflowFixture):
         editor.show()
         self.wait_for(lambda: editor.session.frames and editor.scope is None, "读取短音轨视频")
         last = editor.session.frames.count
-        editor.video_selection = ((3, 7), (12, 15), (last - 5, last))
+        editor.frame_selection.ranges = ((3, 7), (12, 15), (last - 5, last))
         with patch("frameflow.playback.WaveOutput"):
             editor.transport.play_video_selection()
             player = editor.transport.playback
@@ -105,7 +105,7 @@ class EditorPlaybackTest(WorkflowFixture):
             self.assertFalse(any(pcm[-4000:]))
 
     def test_editor_rapid_seeking_keeps_preview_geometry(self):
-        from frameflow.editor import frame_png
+        from frameflow.editing import frame_png
 
         editor = Editor(self.source, self.info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
@@ -361,11 +361,11 @@ class EditorPlaybackTest(WorkflowFixture):
         editor.cursor.setValue(editor.cursor.maximum())
         editor._use_current_frame(editor.video_last)
         self.assertEqual(editor.video_first.value(), 2)
-        self.assertEqual(editor.video_selection, ((2, editor.video_last.value()),))
+        self.assertEqual(editor.frame_selection.ranges, ((2, editor.video_last.value()),))
         tail = min(25, editor.session.frames.count)
         editor._set_video_range(2, tail)
         editor._range_fields_changed()
-        self.assertEqual(editor.video_selection, ((2, tail),))
+        self.assertEqual(editor.frame_selection.ranges, ((2, tail),))
         self.assertIn("1080P", editor.settings.export_edge.itemText(editor.settings.export_edge.findData(1920)))
         editor.settings.export_edge.setCurrentIndex(editor.settings.export_edge.findData(854))
         self.assertIn("854 × 480", editor.settings.export_dimensions.text())

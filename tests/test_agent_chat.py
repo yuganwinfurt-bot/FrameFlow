@@ -4,14 +4,12 @@ import json
 import time
 from unittest.mock import patch
 
-from PIL import Image
-from PySide6.QtCore import QMimeData, QPoint, QPointF, Qt
-from PySide6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QMouseEvent
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QDrag, QMouseEvent
 from PySide6.QtTest import QTest
 from frameflow.agent_api import PROBE_NAME
 from frameflow.agent_ui import AttachmentCard
-from frameflow.media import Processes
-from frameflow.motion import QUEUED_MEDIA, QUEUED_MEDIA_BATCH
+from frameflow.motion import QUEUED_MEDIA_BATCH
 from agent_test_support import call, mock_model, response
 from agent_workspace_support import AgentWorkspaceFixture
 

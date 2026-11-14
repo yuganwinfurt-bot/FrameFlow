@@ -3,50 +3,35 @@
 from __future__ import annotations
 
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from math import ceil, floor
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSignalBlocker, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QCursor, QIntValidator, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QBoxLayout, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu,
-                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
-                               QTabBar, QTabWidget, QVBoxLayout, QWidget,
-                               QWidgetAction)
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QIntValidator
+from PySide6.QtWidgets import (QBoxLayout, QDialog, QFileDialog, QFrame, QHBoxLayout, QLineEdit, QMenu,
+                               QProgressBar, QScrollArea, QSizePolicy, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
-from .edit_session import EditSession
-from .editor_tasks import EditorTasks
-from .editing import (Clip, Frames, VideoSource, audio_segment, frame_png, index_frames, length,
-                      original_audio, render_edit, save_picture, slice_track, splice)
-from .details import DetailsView
-from .editor_controls import _button, _icon_button, _icon_label, _line, _spin, _text, _text_button, timecode as _timecode
-from .editor_settings import ExportSettings
-from .editor_export import EditorExport
-from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabel, RunStatus,
-                             SeekSlider, TransportButton, VideoPreview, VolumePopup)
-from .filmstrip import Filmstrip
 from . import icons
-from .media import output_extension
-from .media_text import detailed_size as _size_text
-from .media import (AUDIO_EXTENSIONS, VIDEO_FRAME_RATES, VIDEO_RESOLUTIONS,
-                    AudioInfo, Cancelled, Export, ImageInfo, MediaError, Processes, VideoInfo,
-                    hardware_acceleration_choices)
-from .media import (_AUDIO_ENCODERS, _ENCODERS, _IMAGE_FORMATS, _save_image, estimate_image_size,
-                    media_path_missing, probe, thumbnail)
-from .motion import (Button, Combo, DirectoryPathEdit, Motion, QualityRow, SpinBox, WheelSlider,
-                     hide_vertical_scroll_bar)
-from .playback import Playback
-from .theme import STUDIO_STYLE, C, shadow
-from .preview_requests import FramePreview, PictureEstimate
-from .preview_footer import PreviewStatus
-from .video_transport import VideoTransport
 from .audio_workspace import AudioWorkspace
+from .details import DetailsView
+from .edit_session import EditSession
+from .editing import Clip, Frames, VideoSource, audio_segment, index_frames, length, slice_track, splice
+from .editor_controls import _button, _icon_label, _spin, _text
+from .editor_export import EditorExport
+from .editor_settings import ExportSettings
+from .editor_tasks import EditorTasks
+from .editor_widgets import FrameNumberEdit, InfoChip, PictureView, RunStatus
+from .filmstrip import Filmstrip
+from .frame_selection import FrameSelection
+from .media import AUDIO_EXTENSIONS, AudioInfo, ImageInfo, MediaError, VideoInfo, _save_image, media_path_missing, probe, thumbnail
+from .media_text import detailed_size as _size_text
+from .motion import Motion, WheelSlider, hide_vertical_scroll_bar
+from .preview_footer import PreviewStatus
+from .preview_requests import FramePreview, PictureEstimate
+from .theme import C, STUDIO_STYLE, shadow
+from .video_transport import VideoTransport
 
-
-_IMAGE_ENCODERS = {"png", "jpg", "jpeg", "webp", "avif", "tiff", "bmp", "gif_image", "ico", "pdf"}
 
 def _rate_text(bits):
     if not bits:
@@ -80,10 +65,7 @@ class Editor(QDialog):
         self.transport = None
         self.session = EditSession(path, info)
         self.filmstrip = None
-        self.video_range = None
-        self.video_overrides = {}
-        self.video_selection = ()
-        self.video_drag_origin = (None, {})
+        self.frame_selection = FrameSelection()
         self.audio_workspace = None
         self.closing = False
         self.frame_preview = FramePreview(
@@ -178,7 +160,7 @@ class Editor(QDialog):
 
         self.transport = VideoTransport(
             self, layout, self.cursor, self.session, self.tools, Path(self.scratch.name) / "timeline.wav",
-            ready=self._ready_video, selection=lambda: self.video_selection, before_play=self.stop_audio,
+            ready=self._ready_video, selection=lambda: self.frame_selection.ranges, before_play=self.stop_audio,
             suspend_seek=self._suspend_seek, playback_stopped=self._playback_stopped,
             frame_played=self._video_played, preview_width=self.preview_split.width,
             notice=self._notice, notice_detail=lambda detail: self.status.setToolTip(detail),
@@ -558,46 +540,29 @@ class Editor(QDialog):
     def _update_range_marker(self):
         if self.filmstrip is None:
             return
-        spans = [(frame, frame) for frame, selected in self.video_overrides.items() if selected]
-        invalid = False
-        if self.video_range is not None:
-            first, last = self.video_range
-            invalid = first > last
-            for frame in sorted(self.video_overrides):
-                if first <= frame <= last and not self.video_overrides[frame]:
-                    if first < frame:
-                        spans.append((first, frame - 1))
-                    first = frame + 1
-            if first <= last:
-                spans.append((first, last))
-        merged = []
-        for first, last in sorted(spans):
-            if merged and first <= merged[-1][1] + 1:
-                merged[-1] = merged[-1][0], max(merged[-1][1], last)
-            else:
-                merged.append((first, last))
-        previous_selection = self.video_selection
-        self.video_selection = () if invalid else tuple(merged)
-        self.filmstrip.set_selection(self.video_selection)
+        previous_selection = self.frame_selection.ranges
+        invalid = self.frame_selection.sync()
+        ranges = self.frame_selection.ranges
+        self.filmstrip.set_selection(ranges)
         if not self.session.frames:
             message = "等待读取帧数"
         elif invalid:
             message = "结束帧应大于或等于起始帧"
-        elif not merged:
+        elif not ranges:
             message = ""
         else:
-            count = sum(last - first + 1 for first, last in merged)
-            message = f"已选 {count} 帧，{len(merged)} 段"
+            count = sum(last - first + 1 for first, last in ranges)
+            message = f"已选 {count} 帧，{len(ranges)} 段"
         self._selection_note = "" if message == "等待读取帧数" else message
         if hasattr(self, "selection_label"):
             self.selection_label.setText(f"· {self._selection_note}" if self._selection_note else "")
-        if self.video_selection != previous_selection and self.tabs.currentWidget() is self.image_page:
+        if self.frame_selection.ranges != previous_selection and self.tabs.currentWidget() is self.image_page:
             self._sync_frame_preview()
         self._update_timeline_header()
 
     def _range_fields_changed(self):
-        self.video_overrides.clear()
-        self.video_range = self.video_first.value(), self.video_last.value()
+        self.frame_selection.overrides.clear()
+        self.frame_selection.set_range(self.video_first.value(), self.video_last.value())
         self._update_range_marker()
 
     def _use_current_frame(self, field):
@@ -607,70 +572,43 @@ class Editor(QDialog):
             self._range_fields_changed()
 
     def _set_video_range(self, first, last):
-        self.video_range = first, last
+        self.frame_selection.set_range(first, last)
+        self._sync_range_fields(first, last)
+
+    def _sync_range_fields(self, first, last):
         with QSignalBlocker(self.video_first), QSignalBlocker(self.video_last):
             self.video_first.setValue(first)
             self.video_last.setValue(last)
 
     def _click_frame(self, frame, modifiers):
-        self.video_drag_origin = self.video_range, dict(self.video_overrides)
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            selected = any(first <= frame <= last for first, last in self.video_selection)
-            in_range = self.video_range is not None and self.video_range[0] <= frame <= self.video_range[1]
-            if selected != in_range:
-                self.video_overrides.pop(frame, None)
-            else:
-                self.video_overrides[frame] = not selected
-        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
-            current = self.cursor.value()
-            first, last = self.video_range or (current, current)
-            if first > last:
-                first = last = current
-            self._set_video_range(min(first, frame), max(last, frame))
-        else:
-            self.video_overrides.clear()
-            self._set_video_range(frame, frame)
+        self.frame_selection.click(frame, self.cursor.value(), **self._selection_modifiers(modifiers))
+        if self.frame_selection.base_range is not None and not modifiers & Qt.KeyboardModifier.ControlModifier:
+            self._sync_range_fields(*self.frame_selection.base_range)
         self._locate_frame(frame)
         self._update_range_marker()
 
     def _drag_select_frames(self, anchor, frame, modifiers):
         if not self._ready_video():
             return
-        first, last = sorted((anchor, frame))
-        base_range, base_overrides = self.video_drag_origin
-        self.video_overrides = dict(base_overrides)
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            for selected_frame in range(first, last + 1):
-                in_range = base_range is not None and base_range[0] <= selected_frame <= base_range[1]
-                was_selected = base_overrides.get(selected_frame, in_range)
-                if not was_selected:
-                    self.video_overrides[selected_frame] = True
-                elif in_range:
-                    self.video_overrides[selected_frame] = False
-                else:
-                    self.video_overrides.pop(selected_frame, None)
-            self.video_range = base_range
-        elif modifiers & Qt.KeyboardModifier.ShiftModifier and base_range is not None:
-            self.video_range = min(base_range[0], first), max(base_range[1], last)
-        else:
-            self.video_overrides.clear()
-            self.video_range = first, last
-        with QSignalBlocker(self.video_first), QSignalBlocker(self.video_last):
-            self.video_first.setValue(first if self.video_range is None else self.video_range[0])
-            self.video_last.setValue(last if self.video_range is None else self.video_range[1])
+        fields = self.frame_selection.drag(anchor, frame, **self._selection_modifiers(modifiers))
+        self._sync_range_fields(*fields)
         self._update_range_marker()
         self._locate_frame(frame)
+
+    @staticmethod
+    def _selection_modifiers(modifiers):
+        return {"control": bool(modifiers & Qt.KeyboardModifier.ControlModifier),
+                "shift": bool(modifiers & Qt.KeyboardModifier.ShiftModifier)}
 
     def _show_frame_context_menu(self, frame, position):
         if not self._ready_video():
             return
-        selected = any(first <= frame <= last for first, last in self.video_selection)
-        if not selected:
-            self.video_overrides.clear()
+        if not self.frame_selection.contains(frame):
+            self.frame_selection.overrides.clear()
             self._set_video_range(frame, frame)
         self._locate_frame(frame)
         self._update_range_marker()
-        count = sum(last - first + 1 for first, last in self.video_selection)
+        count = sum(last - first + 1 for first, last in self.frame_selection.ranges)
         menu = self.frame_context_menu
         menu.clear()
         menu.addAction("播放选区", self.transport.play_video_selection)
@@ -691,11 +629,11 @@ class Editor(QDialog):
 
     def save_selected_frame_as(self):
         if self._ready_video():
-            self.exporter.save_selected_frame_as(self.video_selection)
+            self.exporter.save_selected_frame_as(self.frame_selection.ranges)
 
     def save_video_selection_as(self):
-        if self._ready_video() and self.video_selection:
-            self.exporter.save_video_selection_as(self.video_selection)
+        if self._ready_video() and self.frame_selection.ranges:
+            self.exporter.save_video_selection_as(self.frame_selection.ranges)
 
     def _locate_frame(self, frame):
         self._stop_video()
@@ -814,8 +752,7 @@ class Editor(QDialog):
                 field.setRange(1, count)
             self.video_first.setValue(1)
             self.video_last.setValue(count)
-        self.video_range = None
-        self.video_overrides.clear()
+        self.frame_selection.reset()
         self._update_range_marker()
         self.cursor.setRange(1, count)
         self.locate_input.setEnabled(True)
@@ -843,7 +780,7 @@ class Editor(QDialog):
 
     def _picture_frame_number(self):
         if self.tabs.currentWidget() is self.image_page:
-            return self.video_selection[0][0] if self.video_selection else 1
+            return self.frame_selection.ranges[0][0] if self.frame_selection.ranges else 1
         return self.cursor.value()
 
     def _frame_preview_panel(self):
@@ -911,8 +848,8 @@ class Editor(QDialog):
             action()
 
     def copy_video(self):
-        if self._ready_video() and self.video_selection:
-            count = self.session.copy_video(self.video_selection)
+        if self._ready_video() and self.frame_selection.ranges:
+            count = self.session.copy_video(self.frame_selection.ranges)
             self._notice(f"已复制 {count} 帧。")
 
     def cut_video(self):
@@ -920,8 +857,8 @@ class Editor(QDialog):
         self.delete_video()
 
     def delete_video(self):
-        if self._ready_video() and self.video_selection:
-            self._remove_video_ranges([(first - 1, last) for first, last in self.video_selection])
+        if self._ready_video() and self.frame_selection.ranges:
+            self._remove_video_ranges([(first - 1, last) for first, last in self.frame_selection.ranges])
 
     def _remove_video_ranges(self, ranges, *, audio_tail_end=None):
         """按当前时间线剪掉同一范围，一次撤销恢复两轨。"""

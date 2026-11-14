@@ -24,11 +24,11 @@ from .agent import AgentSession
 from .conversion_batch import BatchTask, inspect_media
 from .conversion_run import ConversionRun
 from .batch_settings import AUDIO_FORMATS, IMAGE_FORMATS, VIDEO_FORMATS, BatchSettings, formats_for
-from .conversion_inspector import ConversionInspector, icon_label
+from .conversion_inspector import ConversionInspector
 from .agent_tools import AgentTools
 from .agent_ui import AgentPage, Attachment
 from .media import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
-from .media import AudioInfo, ImageInfo, VideoInfo
+from .media import ImageInfo, VideoInfo
 from .icons import icon as line_icon
 from .media import (Export, MediaInfo, Processes, Tools,
                     hardware_acceleration_choices)
@@ -187,6 +187,12 @@ class MainWindow(QMainWindow):
         self.empty_preview = label("请先在格式转换页选择一个媒体文件。", muted=True)
         self.empty_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pages.addWidget(self.empty_preview)
+        self._build_conversion_queue()
+        self._build_workspace_transition()
+        self._build_footers()
+        root.addWidget(self.page_footers)
+
+    def _build_conversion_queue(self):
         queue, queue_layout = card()
         self.queue_card = queue
         shadow(queue)
@@ -251,6 +257,7 @@ class MainWindow(QMainWindow):
         self.list.installEventFilter(self)
         self.preview_files.installEventFilter(self)
 
+    def _build_workspace_transition(self):
         self.inspector = ConversionInspector(show_details=self._show_details, edit=self._edit_selected,
                                              queue=self._queue_selected, show_error=self._show_error,
                                              locate=self._locate_output)
@@ -260,12 +267,14 @@ class MainWindow(QMainWindow):
         self.batch_settings.quality_changed.connect(self._quality_changed)
         self.batch_settings.directory_changed.connect(self._batch_directory_changed)
         self.page_transition = PageTransition(
-            self.page_host, queue, self.preview_rail, self.inspector, self.pages, self._rail_width(), self.agent_page)
+            self.page_host, self.queue_card, self.preview_rail, self.inspector, self.pages,
+            self._rail_width(), self.agent_page)
         self.page_transition.queue_columns_progress.connect(self.column_header.set_detail)
         self.page_transition.queue_columns_progress.connect(self.rail_column_header.set_detail)
         self.page_transition.settings_location_changed.connect(self._move_page_settings)
         self.page_transition.settled.connect(self._settle_page)
 
+    def _build_footers(self):
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
@@ -306,7 +315,6 @@ class MainWindow(QMainWindow):
         self.page_footers.setFixedHeight(CONVERSION_FOOTER_HEIGHT)
         self.page_transition.animation.valueChanged.connect(self._resize_page_footer)
         self.page_transition.navigation_position.connect(self.navigation.set_position)
-        root.addWidget(self.page_footers)
 
     def _build_menu(self) -> None:
         """不显示菜单栏，但快捷键仍然挂在窗口上。"""
@@ -1306,9 +1314,7 @@ class MainWindow(QMainWindow):
             if isinstance(page, Editor):
                 page.export_current_page()
             return
-        if self.scope is not None or self.tools is None or any(
-            job.queued and job.state == "读取中" for job in self.jobs.values()
-        ):
+        if self.scope is not None or self.tools is None or self.queue.availability().reading:
             return
         self._prune_missing()
         tasks = [(job.key, job.path, job.info, self._job_export(job))

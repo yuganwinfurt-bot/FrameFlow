@@ -165,7 +165,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.app.processEvents()
         # 一屏能显示几格随窗口宽度变化，期望值按缩放后的实际格子换算。
         expected = ((strip._frame_at(start.x()), strip._frame_at(end.x())),)
-        self.assertEqual(editor.video_selection, expected)
+        self.assertEqual(editor.frame_selection.ranges, expected)
         self.assertEqual((editor.video_first.value(), editor.video_last.value()), expected[0])
 
         visible_last = strip._capacity()
@@ -180,14 +180,14 @@ class EditorTimelineTest(WorkflowFixture):
         strip._scroll_drag_edge()
         QTest.mouseRelease(strip.viewport(), Qt.MouseButton.LeftButton, pos=edge_end)
         self.assertGreater(scroll.value(), 0)
-        self.assertGreater(editor.video_selection[-1][1], visible_last)
+        self.assertGreater(editor.frame_selection.ranges[-1][1], visible_last)
 
         scroll.setValue(0)
         clicked = strip._frame_at(strip._tile_rect(2).center().x())
         first = max(1, clicked - 2)
         last = first + 4
         editor._set_video_range(first, last)
-        editor.video_overrides.clear()
+        editor.frame_selection.overrides.clear()
         editor._update_range_marker()
         menu = editor.frame_context_menu
         QTest.mouseClick(strip.viewport(), Qt.MouseButton.RightButton,
@@ -198,7 +198,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertIn("复制\tCtrl+C", actions)
         self.assertIn("帧后粘贴\tCtrl+V", actions)
         expected = ((first, last),)
-        self.assertEqual(editor.video_selection, expected)
+        self.assertEqual(editor.frame_selection.ranges, expected)
         menu.close()
         sound = patch("winsound.PlaySound") if sys.platform == "win32" else nullcontext()
         with sound:
@@ -207,7 +207,7 @@ class EditorTimelineTest(WorkflowFixture):
             self.wait_for(lambda: editor.transport.playback is None, "播放到选区末尾")
             self.assertEqual(editor.cursor.value(), last)
         editor._show_frame_context_menu(last + 1, QPoint(20, 25))
-        self.assertEqual(editor.video_selection, ((last + 1, last + 1),))
+        self.assertEqual(editor.frame_selection.ranges, ((last + 1, last + 1),))
         picture_action = next(action for action in menu.actions() if action.text() == "保存为图片…")
         menu.close()
 
@@ -226,7 +226,7 @@ class EditorTimelineTest(WorkflowFixture):
             self.assertEqual(image.size, (320, 180))
 
         editor._set_video_range(2, 5)
-        editor.video_overrides.clear()
+        editor.frame_selection.overrides.clear()
         editor._update_range_marker()
         clip = self.root / "选中的片段.mp4"
         with patch("frameflow.editor.QFileDialog.getSaveFileName",
@@ -271,7 +271,7 @@ class EditorTimelineTest(WorkflowFixture):
         shift, ctrl = Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.ControlModifier
         click(1)
         click(10, shift)
-        self.assertEqual(editor.video_selection, ((1, 10),))
+        self.assertEqual(editor.frame_selection.ranges, ((1, 10),))
         click(20, shift)
         click(80, ctrl)
         self.assertEqual(strip.selection, ((1, 20), (80, 80)))
@@ -340,10 +340,10 @@ class EditorTimelineTest(WorkflowFixture):
         start = strip._tile_rect(1).center()
         end = strip._tile_rect(4).center()
         editor._set_video_range(2, 3)
-        editor.video_overrides.update({5: True, 6: True})
+        editor.frame_selection.overrides.update({5: True, 6: True})
         editor._update_range_marker()
         selection = ((2, 3), (5, 6))
-        self.assertEqual(editor.video_selection, selection)
+        self.assertEqual(editor.frame_selection.ranges, selection)
 
         def drag_right():
             QTest.mousePress(viewport, button, pos=start)
@@ -360,14 +360,14 @@ class EditorTimelineTest(WorkflowFixture):
         QTest.keyClick(strip, Qt.Key.Key_Escape)
         QTest.mouseRelease(viewport, button, pos=end)
         self.assertFalse(editor.frame_context_menu.isVisible())
-        self.assertEqual(editor.video_selection, selection)
+        self.assertEqual(editor.frame_selection.ranges, selection)
         self.assertIs(editor.session.video, original)
         drag_right()
         QTest.mouseRelease(viewport, button, pos=end)
         refs = [editor.session.frame_ref(frame)[1] for frame in range(1, 10)]
         self.assertEqual(refs, [0, 3, 6, 7, 1, 2, 4, 5, 8])
         self.assertEqual(len(editor.session.history), 1)
-        self.assertEqual(editor.video_selection, ((5, 8),))
+        self.assertEqual(editor.frame_selection.ranges, ((5, 8),))
         self.assertAlmostEqual(length(editor.session.audio), length(original) / fps)
         silent = slice_track(editor.session.audio, 2 / fps, 4 / fps)
         self.assertTrue(silent and all(clip.path is None for clip in silent))
@@ -396,7 +396,7 @@ class EditorTimelineTest(WorkflowFixture):
         viewport = strip.viewport()
         editor._set_video_range(3, 8)
         editor._update_range_marker()
-        track, selection = editor.session.video, editor.video_selection
+        track, selection = editor.session.video, editor.frame_selection.ranges
         keys = {job.path: key for key, job in window.jobs.items()}
         widths = []
 
@@ -414,7 +414,7 @@ class EditorTimelineTest(WorkflowFixture):
             QTest.qWait(100)
             self.assertEqual(strip.drop_position, expected)
             self.assertIs(editor.session.video, track)
-            self.assertEqual(editor.video_selection, selection)
+            self.assertEqual(editor.frame_selection.ranges, selection)
             self.app.sendEvent(viewport, QDragLeaveEvent())
             self.assertTrue(strip.drop_badge.isHidden())
             self.wait_for(lambda: not strip.springs.timer.isActive(), "空位平滑收回")

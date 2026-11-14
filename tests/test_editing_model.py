@@ -5,6 +5,7 @@ from unittest import TestCase
 
 from frameflow.edit_session import EditSession
 from frameflow.editing import Clip, Frames, audio_segment, length, slice_track
+from frameflow.frame_selection import FrameSelection
 from frameflow.media import VideoInfo
 
 
@@ -38,3 +39,24 @@ class EditingModelTest(TestCase):
         self.assertEqual(segment, [Clip(source, 0, 1.5, 2), Clip(None, -1, 0, 2)])
         self.assertEqual(length(segment), 2.5)
         self.assertEqual(track, [Clip(source, 0, 0, 2)])
+
+
+    def test_ctrl_drag_retargets_from_initial_selection_then_keeps_unrelated_spans(self):
+        selection = FrameSelection()
+        selection.set_range(3, 7)
+        selection.sync()
+        selection.click(5, 5, control=True, shift=False)
+        selection.sync()
+        self.assertEqual(selection.ranges, ((3, 4), (6, 7)))
+
+        selection.drag(5, 9, control=True, shift=False)
+        selection.sync()
+        self.assertEqual(selection.ranges, ((3, 4), (8, 9)))
+
+        selection.drag(5, 4, control=True, shift=False)
+        selection.sync()
+        self.assertEqual(selection.ranges, ((3, 3), (6, 7)))
+
+        selection.set_range(8, 2)
+        self.assertTrue(selection.sync())
+        self.assertEqual(selection.ranges, ())
