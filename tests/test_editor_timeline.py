@@ -316,21 +316,21 @@ class EditorTimelineTest(WorkflowFixture):
         editor.show()
         self.wait_for(lambda: editor.session.frames and editor.scope is None, "加载带音轨的视频")
         editor.tabs.setCurrentWidget(editor.audio_page)
-        self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "音轨波形")
+        self.wait_for(lambda: editor.audio_workspace.audio_view.interval and editor.scope is None, "音轨波形")
         frames = editor.session.frames.count
         fps = editor.session.frames.fps
 
         # 毫秒精度的结束值 .417 秒恰好指向第十帧边界，不多删第十一帧。
-        editor.audio_first.setValue(.168)
-        editor.audio_last.setValue(.417)
+        editor.audio_workspace.audio_first.setValue(.168)
+        editor.audio_workspace.audio_last.setValue(.417)
         editor.cut_audio()
-        self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "剪切后重绘波形")
+        self.wait_for(lambda: editor.audio_workspace.audio_view.interval and editor.scope is None, "剪切后重绘波形")
         self.assertEqual([(c.start, c.end) for c in editor.session.video], [(0, 4), (10, frames)])
         self.assertAlmostEqual(length(editor.session.audio_track()), (frames - 6) / fps)
         self.assertEqual((editor.session.audio_clipboard_video[0].start, editor.session.audio_clipboard_video[0].end), (4, 10))
-        editor.audio_cursor.setValue(4 / fps)
+        editor.audio_workspace.audio_cursor.setValue(4 / fps)
         editor.paste_audio()
-        self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "粘贴同步恢复两轨")
+        self.wait_for(lambda: editor.audio_workspace.audio_view.interval and editor.scope is None, "粘贴同步恢复两轨")
         self.assertEqual([(c.start, c.end) for c in editor.session.video], [(0, 4), (4, 10), (10, frames)])
         self.assertAlmostEqual(length(editor.session.audio_track()), frames / fps)
         editor.undo()
@@ -340,9 +340,9 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertIsNone(editor.session.audio)
 
         # 调过音量的轨道也必须按当前时间线同步裁剪，保留音量设置。
-        editor.audio_first.setValue(0)
-        editor.audio_last.setValue(frames / fps)
-        editor.volume.setValue(35)
+        editor.audio_workspace.audio_first.setValue(0)
+        editor.audio_workspace.audio_last.setValue(frames / fps)
+        editor.audio_workspace.volume.setValue(35)
         editor.set_volume()
         editor.tabs.setCurrentWidget(editor.video_page)
         editor.video_first.setValue(13)
@@ -371,22 +371,22 @@ class EditorTimelineTest(WorkflowFixture):
         editor = Editor(source, info, self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        self.wait_for(lambda: editor.scope is None and editor.audio_view.bands, "选区波形")
-        bounds = editor.audio_view._bounds()
-        self.assertGreater(bounds.height(), editor.audio_view.height() * .75)
+        self.wait_for(lambda: editor.scope is None and editor.audio_workspace.audio_view.bands, "选区波形")
+        bounds = editor.audio_workspace.audio_view._bounds()
+        self.assertGreater(bounds.height(), editor.audio_workspace.audio_view.height() * .75)
         # 音频文件只有「音轨」一个编辑页，外加通用的「文件详情」
         self.assertEqual(editor.tabs.count(), 2)
         self.assertEqual(editor.tabs.tabText(0), "音轨")
         self.assertEqual(editor.tabs.tabText(1), "文件详情")
-        self.assertGreater(editor.audio_view.waveform.frames, 0)
-        editor.audio_first.setValue(0)
-        editor.audio_last.setValue(.5)
+        self.assertGreater(editor.audio_workspace.audio_view.waveform.frames, 0)
+        editor.audio_workspace.audio_first.setValue(0)
+        editor.audio_workspace.audio_last.setValue(.5)
         editor.cut_audio()
         self.assertAlmostEqual(sum(c.length for c in editor.session.audio), info.duration - .5, delta=.01)
-        editor.audio_cursor.setValue(.4)
+        editor.audio_workspace.audio_cursor.setValue(.4)
         editor.paste_audio()
         self.assertAlmostEqual(sum(c.length for c in editor.session.audio), info.duration, delta=.01)
-        editor.volume.setValue(40)
+        editor.audio_workspace.volume.setValue(40)
         editor.set_volume()
         self.assertTrue(any(clip.volume == .4 for clip in editor.session.audio))
         with patch("frameflow.editor.QFileDialog.getOpenFileName", return_value=(str(source), "")):
@@ -615,7 +615,7 @@ class EditorTimelineTest(WorkflowFixture):
         editor.show()
         self.wait_for(lambda: editor.session.frames and editor.scope is None, "读取视频")
         editor.tabs.setCurrentWidget(editor.audio_page)
-        view = editor.audio_view
+        view = editor.audio_workspace.audio_view
         self.wait_for(lambda: editor.scope is None and view.waveform, "原音轨")
         original_video = editor.session.video
         video_end = editor.session.video_duration()
@@ -625,7 +625,7 @@ class EditorTimelineTest(WorkflowFixture):
         self.assertAlmostEqual(view.overflow[0], video_end)
         self.assertAlmostEqual(view.loaded_interval[1], total)
         self.assertEqual(view.trim_mark, view.overflow)
-        self.assertIn("超出 0.900 秒", editor.overflow_label.text())
+        self.assertIn("超出 0.900 秒", editor.audio_workspace.overflow_label.text())
 
         def point(position):
             bounds = view._bounds()
@@ -644,7 +644,7 @@ class EditorTimelineTest(WorkflowFixture):
         def delete_mark():
             start, end = view.trim_mark
             QTest.mouseClick(view, Qt.MouseButton.RightButton, pos=point((start + end) / 2))
-            menu = editor.audio_context_menu
+            menu = editor.audio_workspace.audio_context_menu
             self.assertTrue(menu.isVisible())
             action = next(a for a in menu.actions() if a.text().startswith("删除标红音频"))
             menu.close()
@@ -661,7 +661,7 @@ class EditorTimelineTest(WorkflowFixture):
         start, end = view.trim_mark
         selected = end - start
         self.assertAlmostEqual(selected, .35, delta=.015)
-        self.assertIn(f"标红 {selected:.3f} 秒", editor.overflow_label.text())
+        self.assertIn(f"标红 {selected:.3f} 秒", editor.audio_workspace.overflow_label.text())
         self.assertEqual(view._overflow_after_mark(), view.overflow)
         drag(Qt.MouseButton.RightButton, (start + end) / 2, .8)
         moved_start, moved_end = view.trim_mark
@@ -671,8 +671,8 @@ class EditorTimelineTest(WorkflowFixture):
         projected_start, projected_end = view._overflow_after_mark()
         self.assertAlmostEqual(projected_start, video_end)
         self.assertAlmostEqual(projected_end - projected_start, .9 - selected)
-        self.assertIn(f"删除标红后还差 {.9 - selected:.3f} 秒", editor.overflow_label.text())
-        self.assertFalse(editor.audio_context_menu.isVisible())
+        self.assertIn(f"删除标红后还差 {.9 - selected:.3f} 秒", editor.audio_workspace.overflow_label.text())
+        self.assertFalse(editor.audio_workspace.audio_context_menu.isVisible())
         delete_mark()
         self.assertAlmostEqual(length(editor.session.audio_track()), total - selected)
         self.assertIs(editor.session.video, original_video)
@@ -686,12 +686,12 @@ class EditorTimelineTest(WorkflowFixture):
         editor = Editor(source, probe(source, self.tools, Processes()), self.tools, self.root)
         self.addCleanup(self.dispose_editor, editor)
         editor.show()
-        view = editor.audio_view
+        view = editor.audio_workspace.audio_view
         self.wait_for(lambda: editor.scope is None and view.waveform, "首次波形")
         waveform = view.waveform
         view.zoom(2)
         zoomed = view.interval
-        with patch("frameflow.editor.audio_preview") as decode:
+        with patch("frameflow.audio_workspace.audio_preview") as decode:
             editor.suspend()
             editor.resume()
             self.assertIs(view.waveform, waveform)
@@ -703,7 +703,7 @@ class EditorTimelineTest(WorkflowFixture):
             self.assertIn("找不到音频文件", view.text())
             self.assertIn(source.name, editor.status.text())
             moved.rename(source)
-            editor.preview_audio()
+            editor.audio_workspace.load_preview()
             self.assertIs(view.waveform, waveform)
             self.assertEqual(editor.status.text(), "")
             decode.assert_not_called()

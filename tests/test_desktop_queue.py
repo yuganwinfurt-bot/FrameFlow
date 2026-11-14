@@ -469,7 +469,7 @@ class DesktopQueueTest(WorkflowFixture):
             self.assertEqual(editor.status.text(), "播放结束。")
 
         editor.tabs.setCurrentWidget(editor.audio_page)
-        wave = editor.audio_view
+        wave = editor.audio_workspace.audio_view
         self.wait_for(lambda: editor.scope is None and wave.waveform, "插入前波形")
         bounds = wave._bounds()
         release = QPoint(round(bounds.left() + bounds.width() * .87), round(bounds.center().y()))
@@ -518,9 +518,9 @@ class DesktopQueueTest(WorkflowFixture):
         self.wait_for(lambda: all(job.info and job.picture for job in window.jobs.values()), "队列素材就绪")
         window.inspector.edit_button.click()
         editor = window.pages.currentWidget()
-        self.wait_for(lambda: editor.scope is None and editor.audio_view.waveform, "预览音频波形")
+        self.wait_for(lambda: editor.scope is None and editor.audio_workspace.audio_view.waveform, "预览音频波形")
         source.rename(moved)
-        editor.preview_audio()
+        editor.audio_workspace.load_preview()
         self.wait_for(lambda: len(window.jobs) == 1, "自动移除已移动的文件")
         notice = window.findChild(QMessageBox)
         self.assertTrue(notice.isVisible())

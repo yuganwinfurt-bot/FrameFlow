@@ -194,13 +194,13 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertEqual(editor.cursor.value(), 8)
 
         editor.tabs.setCurrentWidget(editor.audio_page)
-        self.wait_for(lambda: editor.audio_view.interval and editor.scope is None, "内嵌音轨波形")
-        view = editor.audio_view
+        self.wait_for(lambda: editor.audio_workspace.audio_view.interval and editor.scope is None, "内嵌音轨波形")
+        view = editor.audio_workspace.audio_view
         self.app.processEvents()
         self.assertEqual(inspector.geometry(), video_inspector)
         self.assertTrue(editor.timeline.isHidden())
         self.assertTrue(editor.settings.picture_group.isHidden())
-        self.assertLess(editor.zoom_reset.geometry().right(), editor.audio_play.geometry().left())
+        self.assertLess(editor.audio_workspace.zoom_reset.geometry().right(), editor.audio_workspace.audio_play.geometry().left())
         initial = view.interval
         selection = view.selection
         point = QPointF(view._bounds().center())
@@ -217,11 +217,11 @@ class EditorPlaybackTest(WorkflowFixture):
         self.assertGreater(view.interval[0], zoomed[0])
         self.assertAlmostEqual(view.interval[1] - view.interval[0], zoomed[1] - zoomed[0])
         self.assertEqual(view.selection, selection)
-        QTest.mouseClick(editor.zoom_reset, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(editor.audio_workspace.zoom_reset, Qt.MouseButton.LeftButton)
         self.assertEqual(view.interval, initial)
         view.zoom_to_samples((initial[0] + initial[1]) / 2)
         self.assertGreaterEqual(view.sample_spacing(), 3)
-        self.assertIn("采样点", editor.zoom_ratio.text())
+        self.assertIn("采样点", editor.audio_workspace.zoom_ratio.text())
         view.reset_zoom()
         drag_start = QPoint(round(view._bounds().left() + view._bounds().width() * .20), round(point.y()))
         drag_end = QPoint(round(view._bounds().left() + view._bounds().width() * .40), round(point.y()))
@@ -229,7 +229,7 @@ class EditorPlaybackTest(WorkflowFixture):
         QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=drag_end)
         self.assertIsNotNone(view.selection)
         QTest.mouseClick(view, Qt.MouseButton.RightButton, pos=drag_start)
-        menu = editor.audio_context_menu
+        menu = editor.audio_workspace.audio_context_menu
         self.assertTrue(menu.isVisible())
         actions = {action.text(): action for action in menu.actions()}
         self.assertIn("缩放到选区", actions)
@@ -243,43 +243,43 @@ class EditorPlaybackTest(WorkflowFixture):
         if sys.platform == "win32":
             with patch("winsound.PlaySound"):
                 actions["播放选区"].trigger()
-                self.wait_for(lambda: editor.playing, "右键播放音频选区")
-                self.assertEqual(editor.audio_clock[:2], (start, end))
+                self.wait_for(lambda: editor.audio_workspace.playing, "右键播放音频选区")
+                self.assertEqual(editor.audio_workspace.audio_clock[:2], (start, end))
                 editor.stop_audio()
         QTest.mouseClick(view, Qt.MouseButton.LeftButton, pos=point.toPoint())
         self.assertIsNone(view.selection)
-        self.assertEqual(editor.audio_first.value(), editor.audio_last.value())
-        self.assertFalse(editor.apply_volume.isEnabled())
+        self.assertEqual(editor.audio_workspace.audio_first.value(), editor.audio_workspace.audio_last.value())
+        self.assertFalse(editor.audio_workspace.apply_volume.isEnabled())
         position = view.playhead
         self.assertGreater(position, initial[0])
 
         if sys.platform == "win32":
             with patch("winsound.PlaySound") as play_sound:
-                QTest.mouseClick(editor.audio_play, Qt.MouseButton.LeftButton)
-                self.wait_for(lambda: editor.playing and view.playhead > position + .06, "音频播放头前进")
-                self.assertEqual(play_sound.call_args.args[0], str(editor.listen_wav))
-                QTest.mouseClick(editor.audio_play, Qt.MouseButton.LeftButton)
+                QTest.mouseClick(editor.audio_workspace.audio_play, Qt.MouseButton.LeftButton)
+                self.wait_for(lambda: editor.audio_workspace.playing and view.playhead > position + .06, "音频播放头前进")
+                self.assertEqual(play_sound.call_args.args[0], str(editor.audio_workspace.listen_wav))
+                QTest.mouseClick(editor.audio_workspace.audio_play, Qt.MouseButton.LeftButton)
                 paused = view.playhead
                 QTest.qWait(60)
                 self.assertEqual(view.playhead, paused)
-                QTest.mouseClick(editor.audio_play, Qt.MouseButton.LeftButton)
-                self.wait_for(lambda: editor.playing and view.playhead > paused, "从暂停位置续播")
+                QTest.mouseClick(editor.audio_workspace.audio_play, Qt.MouseButton.LeftButton)
+                self.wait_for(lambda: editor.audio_workspace.playing and view.playhead > paused, "从暂停位置续播")
                 window.navigation.setCurrentIndex(0)
                 self.wait_for(lambda: not window.page_transition.running, "退出音频预览")
-                self.assertFalse(editor.playing)
+                self.assertFalse(editor.audio_workspace.playing)
                 window.navigation.setCurrentIndex(1)
                 self.wait_for(lambda: not window.page_transition.running, "返回音频预览")
 
         self.assertEqual(view.interval, initial)
         self.assertGreater(view.insertion, 0)
-        QTest.mouseClick(editor.zoom_reset, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(editor.audio_workspace.zoom_reset, Qt.MouseButton.LeftButton)
         self.assertEqual(view.interval, initial)
-        self.assertEqual((view.insertion, view.playhead, editor.audio_cursor.value()), (0, 0, 0))
-        self.assertEqual((editor.audio_first.value(), editor.audio_last.value()), (0, 0))
+        self.assertEqual((view.insertion, view.playhead, editor.audio_workspace.audio_cursor.value()), (0, 0, 0))
+        self.assertEqual((editor.audio_workspace.audio_first.value(), editor.audio_workspace.audio_last.value()), (0, 0))
         self.assertIsNone(view.selection)
-        self.assertEqual(editor.audio_position.text(), "0:00.000")
+        self.assertEqual(editor.audio_workspace.audio_position.text(), "0:00.000")
 
-        self.assertFalse(editor.audio_tools.isVisible())
+        self.assertFalse(editor.audio_workspace.audio_tools.isVisible())
         self.assertIs(window.pages.currentWidget(), editor)
         window.close()
         self.assertTrue(editor.closing)
