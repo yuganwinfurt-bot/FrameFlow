@@ -366,8 +366,8 @@ class DesktopTransitionsTest(WorkflowFixture):
         outputs = []
         editor.saved.connect(outputs.append)
         release.clear()
-        with patch("frameflow.editor.render_edit", side_effect=hold(render_edit)):
-            window.preview_start.click()
+        with patch("frameflow.editor_export.render_edit", side_effect=hold(render_edit)):
+            window.preview_footer.start.click()
             try:
                 scope = editor.scope
                 self.assertIsNotNone(scope)
@@ -376,7 +376,7 @@ class DesktopTransitionsTest(WorkflowFixture):
                     self.wait_for(lambda: not window.page_transition.running, "编辑导出中切页")
                     self.assertIs(editor.scope, scope)
                     self.assertFalse(scope.cancelled.is_set())
-                self.assertTrue(window.preview_cancel.isEnabled())
+                self.assertTrue(window.preview_footer.cancel.isEnabled())
             finally:
                 release.set()
             self.wait_for(lambda: outputs and editor.scope is None, "编辑导出完成")

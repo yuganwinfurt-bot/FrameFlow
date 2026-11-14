@@ -37,6 +37,7 @@ from .motion import (Button, Combo, DropArea, Motion,
                      NavigationBar, PageTransition, hide_vertical_scroll_bar,
                      install_parameter_wheel_policy, local_files)
 from .editor import Editor
+from .preview_footer import PreviewFooter
 from .media_text import file_size, metadata, rail_meta
 from .queue_state import Job, QueueState
 from .queue_view import (ROW_HEIGHT, THUMB_SIZE, BatchFormatMenu, MediaQueue, QueueColumns,
@@ -295,7 +296,8 @@ class MainWindow(QMainWindow):
         footer_row.addWidget(self.start_button)
         self.page_footers = QStackedWidget()
         self.page_footers.addWidget(footer)
-        self.page_footers.addWidget(self._build_preview_footer())
+        self.preview_footer = PreviewFooter(self.start_export, self._cancel_preview_task)
+        self.page_footers.addWidget(self.preview_footer)
         self.agent_footer = QFrame()
         self.agent_footer.setObjectName("footer")
         agent_footer_layout = QHBoxLayout(self.agent_footer)
@@ -306,36 +308,6 @@ class MainWindow(QMainWindow):
         self.page_transition.animation.valueChanged.connect(self._resize_page_footer)
         self.page_transition.navigation_position.connect(self.navigation.set_position)
         root.addWidget(self.page_footers)
-
-    def _build_preview_footer(self):
-        """预览页底栏：和转换页同一个布局——状态文字、细进度条、取消、开始。"""
-        self.preview_footer = QFrame()
-        self.preview_footer.setObjectName("footer")
-        line = QHBoxLayout(self.preview_footer)
-        line.setContentsMargins(16, 8, 16, 10)
-        line.setSpacing(12)
-        self.preview_status = ElidedLabel("就绪")
-        line.addWidget(self.preview_status, 1)
-        self.preview_progress = QProgressBar()
-        self.preview_progress.setTextVisible(False)
-        self.preview_progress.setRange(0, 100)
-        self.preview_progress.setValue(0)
-        self.preview_progress.setFixedSize(150, 6)
-        line.addWidget(self.preview_progress)
-        self.preview_percent = QLabel("")
-        self.preview_percent.hide()
-        self.preview_cancel = Button("取消转换")
-        self.preview_cancel.clicked.connect(self._cancel_preview_task)
-        self.preview_cancel.setEnabled(False)
-        line.addWidget(self.preview_cancel)
-        self.preview_start = Button("开始导出")
-        self.preview_start.setObjectName("primary")
-        self.preview_start.setMinimumWidth(112)
-        self.preview_start.setIcon(line_icon("export", 15, "#FFFFFF", 1.8))
-        self.preview_start.setIconSize(QSize(15, 15))
-        self.preview_start.clicked.connect(self.start_export)
-        line.addWidget(self.preview_start)
-        return self.preview_footer
 
     def _build_menu(self) -> None:
         """不显示菜单栏，但快捷键仍然挂在窗口上。"""
@@ -817,21 +789,7 @@ class MainWindow(QMainWindow):
     def _sync_footer(self, page) -> None:
         preview = page is not self.conversion_page
         self.page_footers.setCurrentWidget(self.preview_footer if preview else self.footer)
-        editor = page if isinstance(page, Editor) else None
-        busy = editor is not None and editor.scope is not None
-        video = editor is not None and editor.video_page is not None and editor.tabs.currentWidget() is editor.video_page
-        self.preview_start.setVisible(editor is not None)
-        ready = bool(editor is not None and not busy and (
-            (video and editor.session.frames) or (not video and editor.info is not None)))
-        self.preview_start.setEnabled(ready)
-        self.preview_cancel.setEnabled(bool(busy and editor.cancel_button.isEnabled()))
-        note = editor.notice.text() if editor is not None else "等待选择媒体"
-        self.preview_status.setText(note or "就绪")
-        maximum = editor.progress.maximum() if busy else 100
-        value = max(0, editor.progress.value()) if busy else 0
-        self.preview_progress.setRange(0, maximum)
-        self.preview_progress.setValue(value)
-        self.preview_percent.setText(f"{value}%" if maximum else "…")
+        self.preview_footer.show_task(page.export_status() if isinstance(page, Editor) else None)
 
     def _refresh_preview_footer(self, editor):
         if self.navigation.currentIndex() == 1 and self.pages.currentWidget() is editor:
@@ -1347,10 +1305,7 @@ class MainWindow(QMainWindow):
             return
         if self.navigation.currentIndex() == 1:
             if isinstance(page, Editor):
-                if page.tabs.currentWidget() is page.image_page:
-                    page.save_image()
-                else:
-                    page.save_edit()
+                page.export_current_page()
             return
         if self.scope is not None or self.tools is None or any(
             job.queued and job.state == "读取中" for job in self.jobs.values()

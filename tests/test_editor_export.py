@@ -38,7 +38,7 @@ class EditorExportTest(WorkflowFixture):
         destination.mkdir()
         with patch("frameflow.editor_settings.QFileDialog.getExistingDirectory", return_value=str(destination)):
             editor.settings.choose_directory()
-        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.preview_footer.start, Qt.MouseButton.LeftButton)
         self.assertIsNotNone(editor.scope)
         self.wait_for(lambda: editor.scope is None, "媒体预览导出完成")
         expected = destination / "剪辑 Preview (最终).mp4"
@@ -47,7 +47,7 @@ class EditorExportTest(WorkflowFixture):
         self.decode(expected)
 
         self.enter_output_name(editor, "CON")
-        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.preview_footer.start, Qt.MouseButton.LeftButton)
         self.assertIsNotNone(editor.scope)
         self.wait_for(lambda: editor.scope is None, "媒体预览非法名称校验")
         self.assertIn("Windows 保留名称", editor.notice.text())
@@ -71,7 +71,7 @@ class EditorExportTest(WorkflowFixture):
         self.assertEqual(window._selected().output_stem, image.stem)
         names = []
         editor.saved.connect(names.append)
-        QTest.mouseClick(window.preview_start, Qt.MouseButton.LeftButton)
+        QTest.mouseClick(window.preview_footer.start, Qt.MouseButton.LeftButton)
         self.assertIsNotNone(editor.scope)
         self.wait_for(lambda: editor.scope is None, "预览图片导出完成")
         expected = image.with_stem(f"{image.stem} (1)")

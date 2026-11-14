@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (QBoxLayout, QDialog, QDoubleSpinBox, QFileDialog,
                                QWidgetAction)
 
 from .edit_session import EditSession
+from .editor_tasks import EditorTasks
 from .editing import (Clip, Frames, VideoSource, audio_segment, frame_png, index_frames, length,
                       original_audio, render_edit, save_picture, slice_track, splice)
 from .details import DetailsView
 from .editor_controls import _button, _icon_button, _icon_label, _line, _spin, _text, _text_button, timecode as _timecode
 from .editor_settings import ExportSettings
+from .editor_export import EditorExport
 from .editor_widgets import (FrameNumberEdit, InfoChip, PictureView, PreviewLabel, RunStatus,
                              SeekSlider, TransportButton, VideoPreview, VolumePopup)
 from .filmstrip import Filmstrip
@@ -39,6 +41,7 @@ from .motion import (Button, Combo, DirectoryPathEdit, Motion, QualityRow, SpinB
 from .playback import Playback
 from .theme import STUDIO_STYLE, C, shadow
 from .preview_requests import FramePreview, PictureEstimate
+from .preview_footer import PreviewStatus
 from .video_transport import VideoTransport
 from .audio_workspace import AudioWorkspace
 
@@ -51,12 +54,6 @@ def _rate_text(bits):
     if bits >= 1_000_000:
         return f"{bits / 1_000_000:.2f} Mbps"
     return f"{bits / 1_000:.0f} kbps"
-
-
-class EditorEvents(QObject):
-    finished = Signal(object, str)
-    progress = Signal(int)
-    notice = Signal(str)
 
 
 class Editor(QDialog):
@@ -88,12 +85,7 @@ class Editor(QDialog):
         self.video_selection = ()
         self.video_drag_origin = (None, {})
         self.audio_workspace = None
-        self.scope = None
-        self.pending_video_insert = None
-        self.on_done = None
-        self.on_error = None
         self.closing = False
-        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="frameflow-editor")
         self.frame_preview = FramePreview(
             self, tools, panel=self._frame_preview_panel, is_image_panel=lambda: self._page_kind() == "image",
             can_decode=lambda: self.scope is None and not self._video_is_playing()
@@ -102,13 +94,19 @@ class Editor(QDialog):
             report_error=self._preview_error, missing_source=self.missing_source.emit,
         ) if isinstance(info, VideoInfo) else None
         self.scratch = tempfile.TemporaryDirectory(prefix="frameflow-preview-")
-        self.events = EditorEvents(self)
-        self.events.finished.connect(self._finished)
-        self.events.progress.connect(self._progress)
+        self.tasks = EditorTasks(self)
+        self.tasks.completed.connect(self._finished)
+        self.tasks.progress.connect(self._progress)
         self.setWindowTitle(f"编辑与预览 · {path.name}")
         self.resize(1010, 740)
         self._build()
-        self.events.notice.connect(self._notice)
+        self.exporter = EditorExport(
+            self, self.path, self.session, self.settings, self.tools,
+            canvas_for=self._canvas_for, run_task=self._run, progress=self.tasks.progress.emit,
+            notice=self._notice, worker_notice=self.tasks.notice.emit, saved=self._saved,
+            output_stem=self._get_output_stem,
+        )
+        self.tasks.notice.connect(self._notice)
         if not defer_media:
             self.start_media()
 
@@ -691,108 +689,13 @@ class Editor(QDialog):
         menu.addAction("撤销\tCtrl+Z", self.undo).setEnabled(bool(self.session.history))
         menu.popup(position)
 
-    @staticmethod
-    def _target_from_dialog(filename, selected_filter, extensions):
-        if not filename:
-            return None, None
-        target = Path(filename).expanduser()
-        suffix = target.suffix.lower().lstrip(".")
-        if not suffix:
-            suffix = extensions.get(selected_filter)
-            if not suffix:
-                return None, None
-            target = target.with_suffix(f".{suffix}")
-        return target, suffix
-
     def save_selected_frame_as(self):
-        if not self._ready_video() or len(self.video_selection) != 1:
-            return
-        frame, last = self.video_selection[0]
-        if frame != last:
-            return
-        path, index = self.session.frame_ref(frame)
-        filters = {
-            "PNG 图片 (*.png)": "png", "JPEG 图片 (*.jpg *.jpeg)": "jpg",
-            "WebP 图片 (*.webp)": "webp", "AVIF 图片 (*.avif)": "avif",
-            "TIFF 图片 (*.tiff)": "tiff", "BMP 图片 (*.bmp)": "bmp",
-            "静态 GIF 图片 (*.gif)": "gif", "ICO 图标 (*.ico)": "ico",
-            "PDF 文档 (*.pdf)": "pdf",
-        }
-        current = self.settings.image_format.currentData() or "png"
-        extension = "gif" if current == "gif_image" else current
-        selected_filter = next((name for name, suffix in filters.items() if suffix == extension),
-                               "PNG 图片 (*.png)")
-        default = self.settings.directory / f"{self.path.stem}_帧{frame:06}.{extension}"
-        filename, chosen = QFileDialog.getSaveFileName(
-            self, "保存当前帧为图片", str(default), ";;".join(filters), selected_filter,
-            QFileDialog.Option.DontConfirmOverwrite)
-        target, suffix = self._target_from_dialog(filename, chosen or selected_filter, filters)
-        if not target:
-            return
-        kinds = {"jpeg": "jpg", "jpg": "jpg", "gif": "gif_image"}
-        kind = kinds.get(suffix, suffix)
-        if kind not in _IMAGE_FORMATS:
-            self._notice("请选择支持的图片格式。")
-            return
-        if target.resolve() == self.path.resolve():
-            self._notice("不能用保存图片覆盖源视频。")
-            return
-        quality, limit, png_compression = self.settings.picture_encoding()
-        max_edge, video = self.settings.resolution.currentData(), self.session.video_sources[path].info
-        self._run("正在保存所选帧…",
-                  lambda scope: save_picture(self.path, video, index, kind, quality, limit,
-                                             target.parent, self.tools, scope,
-                                             max_edge=max_edge, target=target, frame_path=path,
-                                             png_compression=png_compression),
-                  lambda path: self._saved(path, limit, frame=frame), exporting=True)
+        if self._ready_video():
+            self.exporter.save_selected_frame_as(self.video_selection)
 
     def save_video_selection_as(self):
-        if not self._ready_video() or not self.video_selection:
-            return
-        video, audio = self.session.tracks_for_selection(self.video_selection)
-        fps = self.session.frames.fps
-        formats = {
-            "MP4 视频 (*.mp4)": ("mp4", "mp4"),
-            "MP4 视频 H.265 (*.mp4)": ("mp4_hevc", "mp4"),
-            "MKV 视频 H.264 (*.mkv)": ("mkv", "mkv"),
-            "MKV 视频 H.265 (*.mkv)": ("mkv_hevc", "mkv"),
-            "MOV 视频 (*.mov)": ("mov", "mov"),
-            "WebM 视频 (*.webm)": ("webm", "webm"),
-            "AVI 视频 (*.avi)": ("avi", "avi"),
-        }
-        current = self.settings.format.currentData() or "mp4"
-        initial_filter = next((name for name, (kind, _) in formats.items() if kind == current),
-                              "MP4 视频 (*.mp4)")
-        default_ext = formats[initial_filter][1]
-        default = self.settings.directory / f"{self.path.stem}_选区.{default_ext}"
-        filename, chosen = QFileDialog.getSaveFileName(
-            self, "另存所选视频片段", str(default), ";;".join(formats), initial_filter,
-            QFileDialog.Option.DontConfirmOverwrite)
-        extensions = {name: extension for name, (_, extension) in formats.items()}
-        target, suffix = self._target_from_dialog(filename, chosen or initial_filter, extensions)
-        if not target:
-            return
-        selected_kind, selected_suffix = formats.get(chosen, (suffix, suffix))
-        kind = selected_kind if suffix == selected_suffix else suffix
-        if kind not in _ENCODERS:
-            self._notice("请选择支持的视频格式。")
-            return
-        if target.resolve() == self.path.resolve():
-            self._notice("不能用另存片段覆盖源视频。")
-            return
-        acceleration = self.settings.acceleration.currentData() or "cpu"
-        supported = {backend for backend, _ in hardware_acceleration_choices(self.tools.ffmpeg, kind)}
-        options = Export(kind, target.parent,
-                         max_edge=int(self.settings.export_edge.currentData() or 0),
-                         video_acceleration=acceleration if acceleration in supported else "cpu",
-                         output_fps=int(self.settings.output_fps.currentData() or 0))
-        canvas = self._canvas_for(video)
-        self._run("正在另存所选视频片段…",
-                  lambda scope: render_edit(self.path, video, audio, fps, options,
-                                            self.tools, scope, self.events.progress.emit,
-                                            target=target, canvas=canvas,
-                                            notice=self.events.notice.emit),
-                  self._saved, exporting=True)
+        if self._ready_video() and self.video_selection:
+            self.exporter.save_video_selection_as(self.video_selection)
 
     def _locate_frame(self, frame):
         self._stop_video()
@@ -815,7 +718,11 @@ class Editor(QDialog):
         else:
             self._notice(f"请输入 1 到 {self.cursor.maximum()} 之间的帧号。")
 
-    def _run(self, message, worker, on_done, *, exporting=False, on_error=None):
+    @property
+    def scope(self):
+        return self.tasks.scope
+
+    def _run(self, message, worker, on_done, *, exporting=False, on_error=None, kind=""):
         if self.scope is not None or self.closing:
             return
         self._stop_video()
@@ -825,7 +732,7 @@ class Editor(QDialog):
         if not self.embedded:
             self.progress_row.show()
         self.progress.setValue(0)
-        self.scope = Processes()
+        self.tasks.reserve(on_done, on_error, kind)
         if self.audio_workspace is not None:
             self.audio_workspace.refresh_toolbar()
         if self.filmstrip is not None:
@@ -833,36 +740,17 @@ class Editor(QDialog):
             self._update_locate_button()
         self.cancel_button.setEnabled(True)
         self.settings.picture_group.setEnabled(False)
-        self.on_done = on_done
-        self.on_error = on_error
         self.task_changed.emit()
-        self.pool.submit(self._worker, worker, self.scope)
+        self.tasks.submit(worker)
 
-    def _worker(self, worker, scope):
-        try:
-            result = worker(scope)
-        except Exception as exc:
-            self.events.finished.emit(None, str(exc) or type(exc).__name__)
-        else:
-            self.events.finished.emit(result, "")
-
-    @Slot(object, str)
-    def _finished(self, result, error):
-        if self.closing:
-            return
-        scope, self.scope = self.scope, None
-        if scope is not None and scope is self.pending_video_insert:
-            self.pending_video_insert = None
-            if scope.cancelled.is_set():
-                error = "已取消素材插入。"
+    @Slot(object, str, object, object)
+    def _finished(self, result, error, done, failed):
         if self.filmstrip is not None:
             self.transport.play_button.setEnabled(self.session.frames is not None)
             self._update_locate_button()
         self.cancel_button.setEnabled(False)
         self.settings.picture_group.setEnabled(True)
         self.progress_row.hide()
-        done, self.on_done = self.on_done, None
-        failed, self.on_error = self.on_error, None
         if error:
             if self.audio_workspace is not None and self.audio_workspace.listen_requested:
                 self.stop_audio()
@@ -1110,8 +998,8 @@ class Editor(QDialog):
         if cached is not None:
             insert(cached)
         else:
-            self._run("正在读取拖入的画面…", lambda scope: self._load_dropped_video(path, info, scope), insert)
-            self.pending_video_insert = self.scope
+            self._run("正在读取拖入的画面…", lambda scope: self._load_dropped_video(path, info, scope),
+                      insert, kind="video_insert")
 
     def _load_dropped_video(self, path, info, scope):
         if isinstance(info, VideoInfo):
@@ -1252,7 +1140,7 @@ class Editor(QDialog):
         self._run("正在读取新音频…", load, self._change_audio)
 
     def undo(self):
-        if self.pending_video_insert is not None:
+        if self.tasks.kind == "video_insert":
             self.cancel_operation()
             return
         if self.scope is None and self.session.history:
@@ -1269,24 +1157,26 @@ class Editor(QDialog):
         if self.audio_workspace is not None:
             self.audio_workspace.stop()
 
+    def export_status(self) -> PreviewStatus:
+        busy = self.scope is not None
+        ready = self.session.frames is not None if self._page_kind() == "video" else self.info is not None
+        return PreviewStatus(
+            can_export=not busy and ready,
+            can_cancel=busy and self.cancel_button.isEnabled(),
+            message=self.notice.text(),
+            maximum=self.progress.maximum() if busy else 100,
+            progress=max(0, self.progress.value()) if busy else 0,
+        )
+
+    def export_current_page(self):
+        if self.tabs.currentWidget() is self.image_page:
+            self.save_image()
+        else:
+            self.save_edit()
+
     def save_edit(self):
-        if self.scope is not None:
-            return
-        video = self.session.video if self.tabs.currentWidget() is self.video_page else []
-        audio = self.session.audio_track()
-        options = self.output_options()
-        if options.format in _AUDIO_ENCODERS:
-            video = []
-        if not video and not audio:
-            self._notice("请先载入有效的帧或音频片段。")
-            return
-        fps = self.session.frames.fps if self.session.frames else 0
-        canvas = self._canvas_for(video)
-        self._run("正在保存编辑结果…",
-                  lambda scope: render_edit(self.path, video, audio, fps, options, self.tools,
-                                            scope, self.events.progress.emit, canvas=canvas,
-                                            notice=self.events.notice.emit),
-                  self._saved, exporting=True)
+        if self.scope is None:
+            self.exporter.save_edit(include_video=self.tabs.currentWidget() is self.video_page)
 
     def _picture_source(self):
         if isinstance(self.info, ImageInfo):
@@ -1313,22 +1203,11 @@ class Editor(QDialog):
     def save_image(self):
         if self.scope is not None:
             return
-        is_video = isinstance(self.info, VideoInfo)
-        if is_video and not self.session.frames:
-            return
-        frame = self._picture_frame_number() if is_video else None
-        path, index = self.session.frame_ref(frame) if is_video else (self.path, 0)
-        video = self.session.video_sources[path].info if is_video else None
-        kind = self.settings.image_format.currentData()
-        quality, limit, png_compression = self.settings.picture_encoding()
-        directory, max_edge = self.settings.directory, self.settings.resolution.currentData()
-        output_stem = self._get_output_stem()
-        def save(scope):
-            return save_picture(self.path, video, index, kind, quality, limit, directory,
-                                self.tools, scope, max_edge=max_edge, frame_path=path,
-                                png_compression=png_compression, output_stem=output_stem)
-        message = f"正在保存第 {frame} 帧…" if frame is not None else "正在保存图片…"
-        self._run(message, save, lambda path: self._saved(path, limit, frame=frame), exporting=True)
+        if isinstance(self.info, VideoInfo):
+            if self.session.frames:
+                self.exporter.save_image(self._picture_frame_number())
+        else:
+            self.exporter.save_image()
 
     def _saved(self, path, limit=0, *, frame=None):
         self.saved.emit(path)
@@ -1374,10 +1253,7 @@ class Editor(QDialog):
         self.picture_estimate.shutdown()
         for animation in self.findChildren(Motion):
             animation.stop()
-        if self.scope:
-            self.scope.cancel()
-        self.pool.shutdown(wait=True, cancel_futures=True)
-        self.on_done = None
+        self.tasks.shutdown()
         self.scratch.cleanup()
 
     def reject(self):

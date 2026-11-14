@@ -280,7 +280,7 @@ class AgentWorkspaceTest(GuiTestCase):
             self.assertTrue(area.isAncestorOf(field) and field.isVisible())
             area.ensureWidgetVisible(field)
             self.assertTrue(area.viewport().rect().contains(field.mapTo(area.viewport(), field.rect().center())))
-            self.assertTrue((window.preview_start if page == 1 else window.start_button).isVisible())
+            self.assertTrue((window.preview_footer.start if page == 1 else window.start_button).isVisible())
 
         # Exercise an inline numeric editor, whose wheel initially arrives at its QLineEdit child.
         double = QDoubleSpinBox()

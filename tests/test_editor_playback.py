@@ -182,8 +182,8 @@ class EditorPlaybackTest(WorkflowFixture):
         # 设置可以滚动，主任务栏的导出按钮始终可用。
         self.assertTrue(editor.settings.quality.isVisible())
         self.assertFalse(editor.settings.quality.slider.isHidden())
-        self.assertTrue(window.preview_start.isEnabled())
-        self.assertTrue(window.preview_start.visibleRegion().boundingRect().contains(window.preview_start.rect()))
+        self.assertTrue(window.preview_footer.start.isEnabled())
+        self.assertTrue(window.preview_footer.start.visibleRegion().boundingRect().contains(window.preview_footer.start.rect()))
         editor.cursor.setValue(8)
         window.navigation.setCurrentIndex(0)
         self.wait_for(lambda: not window.page_transition.running, "返回转换页")
